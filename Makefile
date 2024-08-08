@@ -2,6 +2,14 @@
 
 all: build
 
+VERSION ?= $(shell git describe --tags)
+COMMITLONG ?=$(shell git rev-parse HEAD)
+COMMITSHORT ?= $(shell git rev-parse --short HEAD)
+GOVERSION ?= $(shell go version)
+PLATFORM  ?= $(shell uname -i )
+BUILDDATE ?= $(shell date -Is)
+GOLDFLAGS=-ldflags="-X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMITLONG)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMITSHORT)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.GoVersion=$(GOVERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(PLATFORM)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILDDATE)'"
+LDFLAGS="-X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMITLONG)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMITSHORT)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.GoVersion=$(GOVERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(PLATFORM)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILDDATE)'"
 SECRETNAME=gcr-json-key
 P11_TOKEN=ajak
 P11_PIN=password
@@ -26,7 +34,7 @@ gen-openapi:
 		@swagger generate client --quiet --existing-models=pkg/est/models -c pkg/est/client -f apis/kms/v1/est.yaml
 build:
 		@go version
-		@go build -o k8s-kms-plugin cmd/k8s-kms-plugin/main.go
+		@go build $(GOLDFLAGS) -o k8s-kms-plugin cmd/k8s-kms-plugin/main.go
 build-debug:
 		@go version
 		@go build -gcflags="all=-N -l" -o k8s-kms-plugin cmd/k8s-kms-plugin/main.go
@@ -54,3 +62,10 @@ p11tool-delete:
 
 deploy:
 		@gcloud endpoints services deploy --format json "./apis/api-service.yaml" "./apis/istio/v1/v1.pb"  > "./deployed.json"
+
+release: 
+		
+		LDFLAGS=$(LDFLAGS) goreleaser release --clean 
+get-ldflags:
+ 	
+		@echo $(LDFLAGS)
