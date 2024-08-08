@@ -13,7 +13,7 @@ COMMIT_SHORT ?= $(shell git rev-parse --short=8 HEAD)
 GO_VERSION ?= $(shell go version)
 BUILD_PLATFORM ?= $(shell uname -m)
 BUILD_DATE ?= $(shell date -Iseconds)
-LDFLAGS="-X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMIT_LONG)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMIT_SHORT)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.GoVersion=$(GO_VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(BUILD_PLATFORM)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILD_DATE)'"
+LDFLAGS = "-X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMIT_LONG)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMIT_SHORT)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.GoVersion=$(GO_VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(BUILD_PLATFORM)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILD_DATE)'"
 GO_LDFLAGS = -ldflags=$(LDFLAGS)
 # For dev
 SECRET_NAME=gcr-json-key
