@@ -49,6 +49,7 @@ kos:
       - linux/amd64
     flags:
       - -trimpath
+    ldflags:
       - "{{ .Env.LDFLAGS }}"
     env:
        - CGO_ENABLED=1 # Mandatory for crypto11 pkg or go libraries using C compilator

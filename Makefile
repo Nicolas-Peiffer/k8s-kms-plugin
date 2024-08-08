@@ -8,7 +8,7 @@ PROJECT_NAME := k8s-kms-plugin
 REPOSITORY_NAME := "github.com/ThalesGroup/$(PROJECT_NAME)"
 
 VERSION ?= $(shell git describe --tags --always)
-COMMIT_LONG ?=$(shell git rev-parse HEAD)
+COMMIT_LONG ?= $(shell git rev-parse HEAD)
 COMMIT_SHORT ?= $(shell git rev-parse --short=8 HEAD)
 GO_VERSION ?= $(shell go version)
 BUILD_PLATFORM ?= $(shell uname -m)
