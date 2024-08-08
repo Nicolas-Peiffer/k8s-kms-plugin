@@ -48,7 +48,7 @@ runs:
         password: ${{ inputs.registry_password }} 
     # Install ko to publish container images
     - name: Set up Ko
-      uses: ko-build/setup-ko@v0.6
+      uses: ko-build/setup-ko@v0.7
     # Install cosign to sign artfacts with goreleaser 
     - name: Install Cosign
       uses: sigstore/cosign-installer@v3.5.0
