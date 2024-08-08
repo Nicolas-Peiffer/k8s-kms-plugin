@@ -1,19 +1,28 @@
-.PHONY: all lint build coverage dev  gen
+# Copyright 2024 Thales
+.PHONY: all lint build coverage dev gen
 
 all: build
 
-VERSION ?= $(shell git describe --tags)
-COMMITLONG ?=$(shell git rev-parse HEAD)
-COMMITSHORT ?= $(shell git rev-parse --short HEAD)
-GOVERSION ?= $(shell go version)
-PLATFORM  ?= $(shell uname -i )
-BUILDDATE ?= $(shell date -Is)
-GOLDFLAGS=-ldflags="-X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMITLONG)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMITSHORT)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.GoVersion=$(GOVERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(PLATFORM)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILDDATE)'"
-LDFLAGS="-X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMITLONG)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMITSHORT)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.GoVersion=$(GOVERSION)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(PLATFORM)' -X 'github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILDDATE)'"
-SECRETNAME=gcr-json-key
+# Project name
+PROJECT_NAME := k8s-kms-plugin
+REPOSITORY_NAME := "github.com/ThalesGroup/$(PROJECT_NAME)"
+
+VERSION ?= $(shell git describe --tags --always)
+COMMIT_LONG ?=$(shell git rev-parse HEAD)
+COMMIT_SHORT ?= $(shell git rev-parse --short=8 HEAD)
+GO_VERSION ?= $(shell go version)
+BUILD_PLATFORM ?= $(shell uname -m)
+BUILD_DATE ?= $(shell date -Iseconds)
+LDFLAGS="-X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMIT_LONG)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMIT_SHORT)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.GoVersion=$(GO_VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(BUILD_PLATFORM)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILD_DATE)'"
+GO_LDFLAGS = -ldflags=$(LDFLAGS)
+# For dev
+SECRET_NAME=gcr-json-key
 P11_TOKEN=ajak
 P11_PIN=password
 ## Pipeline
+
+# Go parameters
+CGO_ENABLED := "1"
 
 lint:
 		@golangci-lint run
@@ -34,7 +43,7 @@ gen-openapi:
 		@swagger generate client --quiet --existing-models=pkg/est/models -c pkg/est/client -f apis/kms/v1/est.yaml
 build:
 		@go version
-		@go build $(GOLDFLAGS) -o k8s-kms-plugin cmd/k8s-kms-plugin/main.go
+		@go build $(GO_LDFLAGS) -o k8s-kms-plugin cmd/k8s-kms-plugin/main.go
 build-debug:
 		@go version
 		@go build -gcflags="all=-N -l" -o k8s-kms-plugin cmd/k8s-kms-plugin/main.go
@@ -64,7 +73,7 @@ deploy:
 		@gcloud endpoints services deploy --format json "./apis/api-service.yaml" "./apis/istio/v1/v1.pb"  > "./deployed.json"
 
 release: 
-		
+		@echo "Makefile: Running goreleaser release --clean fro project $(PROJECT_NAME)"
 		LDFLAGS=$(LDFLAGS) goreleaser release --clean 
 get-ldflags:
  	
