@@ -191,9 +191,9 @@ release:
   github:
     owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
     name: '{{ .ProjectName }}'
-  gitlab:
-    owner: ""
-    name: "{{ .Env.CI_PROJECT_PATH }}"
+  #gitlab:
+  #  owner: ""
+  #  name: "{{ .Env.CI_PROJECT_PATH }}"
   footer: |
     ### Thanks to all contributors!
 
