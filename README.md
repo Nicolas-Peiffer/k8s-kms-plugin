@@ -4,7 +4,7 @@ This microservice implements the Kubernetes KMS protocol as a gRPC service that 
 
 This plugin will also run in proxy mode which can connect to a remote plugin service running in a secure network device (Key Managers)
 
-## requirements
+## Requirements
 
 This service is designed for kubernetes clusters that are using version 1.10.0 or higher and implements the KMS API:
 
@@ -12,11 +12,42 @@ https://kubernetes.io/docs/tasks/administer-cluster/kms-provider/
 
 So for development purposes, you'll want a cluster that can be configured to use a KMS gRPC endpoint on your APIServer nodes.
 
-To serve the k8s-kms-plugin for encryption operations from Kubernetes, you will need at least one AES key in a PKCS11 provider.
+To serve the `k8s-kms-plugin` for encryption operations from Kubernetes, you will need at least one AES key in a PKCS11 provider.
+
+## Build `k8s-kms-plugin` locally with `goreleaser`
+
+This allows you to test your `goreleaser` Github Action Recipe locally.
+
+### shell `bash`
+
+Follow these instruction to locally build the using the shell bash. I use
+`make get-ldflags` to create `LDFLAGS`.
+
+```bash
+export LDFLAGS=$(make get-ldflags)
+export WORKSPACE=/pwd
+export GITHUB_REPOSITORY_OWNER=localfakegithubowner
+```
+
+```bash
+podman run -it --rm -v $PWD:/pwd   --workdir /pwd -e LDFLAGS=$LDFLAGS   -e WORKSPACE=$WORKSPACE -e GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER  --platform "linux/amd64"  ghcr.io/thalesgroup/goreleaser-glibc-image:golang-1.23.0-bookworm release --clean --snapshot --skip sign,publish,validate,ko,sbom
+```
+
+### shell `fish`
+
+```bash
+set LDFLAGS $(make get-ldflags)
+set WORKSPACE /pwd
+set GITHUB_REPOSITORY_OWNER localfakegithubowner
+```
+
+```bash
+podman run -it --rm -v $PWD:/pwd   --workdir /pwd -e LDFLAGS=$LDFLAGS   -e WORKSPACE=$WORKSPACE -e GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER  --platform "linux/amd64"  ghcr.io/thalesgroup/goreleaser-glibc-image:golang-1.23.0-bookworm release --clean --snapshot --skip sign,publish,validate,ko,sbom
+```
 
 ## KMS provider for SoftHsm V2
 
-In this mode, we recommend to run the k8s-kms-plugin with the GCM algorithm.  
+In this mode, we recommend to run the `k8s-kms-plugin` with the GCM algorithm.  
 It provides a better design for authenticated encryption operations :
 
 ```sh
@@ -32,7 +63,7 @@ k8s-kms-plugin serve \
 ## KMS provider for TPM2 PKCS11
 
 You must know that AES GCM is not supported by the TPM v2 specifications.
-In this mode, we recommend to run the k8s-kms-plugin with the CBC-then-HMAC algorithm. 
+In this mode, we recommend to run the `k8s-kms-plugin` with the CBC-then-HMAC algorithm. 
 You must provide an HMAC key alongside the AES key for encryption :
 
 ```sh
@@ -53,7 +84,7 @@ Read the [QUICKSTART.md](QUICKSTART.md).
 
 This plugin is designed to be deployed in 2 configurations
 
-- Client/Server - k8s-kms-plugin in `client` mode will `enroll` to an external k8s-kms-plugin running in `serve` mode
+- Client/Server - `k8s-kms-plugin` in `client` mode will `enroll` to an external `k8s-kms-plugin` running in `serve` mode
 - StandAlone(TODO) - Plugin and PKCS11 library deployed as StaticPod/HostContainer on APIServer nodes, this will require
 coordination with k8s provisioning tools.
 
