@@ -5,16 +5,20 @@ all: build
 
 # Project name
 PROJECT_NAME := k8s-kms-plugin
-REPOSITORY_NAME := "github.com/ThalesGroup/$(PROJECT_NAME)"
+GO_MODULE_NAME := "github.com/ThalesGroup/$(PROJECT_NAME)"
 
+# Useful variables for build metadata
 VERSION ?= $(shell git describe --tags --always)
 COMMIT_LONG ?= $(shell git rev-parse HEAD)
 COMMIT_SHORT ?= $(shell git rev-parse --short=8 HEAD)
+COMMIT_TIMESTAMP := $(shell git show -s --format=%cI HEAD)
 GO_VERSION ?= $(shell go version)
-BUILD_PLATFORM ?= $(shell uname -m)
+BUILD_PLATFORM  ?= $(shell uname -m)
 BUILD_DATE ?= $(shell date -Iseconds)
-LDFLAGS = "-X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.RawGitVersion=$(VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdLong=$(COMMIT_LONG)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.CommitVersionIdShort=$(COMMIT_SHORT)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.GoVersion=$(GO_VERSION)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildPlatform=$(BUILD_PLATFORM)' -X '$(REPOSITORY_NAME)/cmd/k8s-kms-plugin/cmd.BuildDate=$(BUILD_DATE)'"
+LDFLAGS = "-X '$(GO_MODULE_NAME)/pkg/version.RawGitDescribe=$(VERSION)' -X '$(GO_MODULE_NAME)/pkg/version.GitCommitIdLong=$(COMMIT_LONG)' -X '$(GO_MODULE_NAME)/pkg/version.GitCommitIdShort=$(COMMIT_SHORT)' -X '$(GO_MODULE_NAME)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE_NAME)/pkg/version.BuildPlatform=$(BUILD_PLATFORM)' -X '$(GO_MODULE_NAME)/pkg/version.BuildDate=$(BUILD_DATE)' -X '$(GO_MODULE_NAME)/pkg/version.GitCommitTimestamp=$(COMMIT_TIMESTAMP)'"
 GO_LDFLAGS = -ldflags=$(LDFLAGS)
+BINARY_NAME = $(PROJECT_NAME)
+
 # For dev
 SECRET_NAME=gcr-json-key
 P11_TOKEN=ajak

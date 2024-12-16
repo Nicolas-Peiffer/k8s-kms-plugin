@@ -46,14 +46,15 @@ require (
 	golang.org/x/text v0.20.0 // indirect
 	golang.org/x/tools/cmd/cover v0.1.0-deprecated
 	gopkg.in/ini.v1 v1.67.0 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1
+	gopkg.in/yaml.v2 v2.4.0
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
 	github.com/ThalesGroup/crypto11 v1.2.6
 	github.com/ThalesGroup/gose v0.9.0
-	github.com/coreos/go-semver v0.3.1
+	github.com/blang/semver/v4 v4.0.0
+	github.com/hashicorp/go-version v1.7.0
 	k8s.io/kms v0.31.3
 )
 
