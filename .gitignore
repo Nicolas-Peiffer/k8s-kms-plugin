@@ -8,6 +8,7 @@ build/
 generated/
 deployed.json
 .socket
+k8s-kms-plugin
 
 # dev
 pkg/crypto11
@@ -36,3 +37,6 @@ vendor/
 
 # Go workspace file
 go.work
+
+# output for build
+dist/
