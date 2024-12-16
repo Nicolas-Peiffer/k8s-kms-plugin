@@ -34,9 +34,7 @@ import (
 	"log"
 	"log/slog"
 	"strconv"
-	"strings"
 
-	"github.com/blang/semver/v4"
 	go_version "github.com/hashicorp/go-version"
 	"gopkg.in/yaml.v2"
 )
@@ -192,33 +190,25 @@ func SlogOutput() {
 }
 
 func VersionOutputToString(outputFormat string, prettyPrint bool) string {
-	if outputFormat == "json" {
+	switch outputFormat {
+	case "json":
 		data, _ := returnJsonVersion(prettyPrint)
 		return string(data)
-	} else if outputFormat == "yaml" {
+	case "yaml":
 		data, _ := returnYamlVersion()
-		return (string(data))
-	} else {
-		version, _ := semver.Parse(RawGitDescribe)
-		return "k8s-kms-plugin: v" + strconv.FormatUint(version.Major, 10) + "." +
-			strconv.FormatUint(version.Minor, 10) + "." +
-			strconv.FormatUint(version.Patch, 10)
+		return string(data)
+	default:
+		version, err := go_version.NewVersion(RawGitDescribe)
+		if err != nil {
+			slog.Error("Raw git describe --tags --always version is not parsable as semantic versioning. Set major, minor and patch to 0 ",
+				"raw_git_describe", RawGitDescribe,
+				"error", err)
+			return "k8s-kms-plugin: v0.0.0"
+		}
+		// returns a string in the format of k8s-kms-plugin: vmajor.minor.patch
+		return "k8s-kms-plugin: v" +
+			strconv.FormatUint(uint64(version.Segments()[0]), 10) + "." +
+			strconv.FormatUint(uint64(version.Segments()[1]), 10) + "." +
+			strconv.FormatUint(uint64(version.Segments()[2]), 10)
 	}
-}
-
-// ParseVersion is a method that parses a version string that may be in
-// major.minor or major.minor.patch format.
-func SafeParseVersion(versionString string) (semver.Version, error) {
-	// Preprocess the version string to add ".0" if it's missing the patch version
-	if strings.Count(versionString, ".") == 1 {
-		versionString += ".0"
-	}
-
-	// Parse the version string
-	version, err := semver.Parse(versionString)
-	if err != nil {
-		return semver.Version{}, fmt.Errorf("error parsing version: %v", err)
-	}
-
-	return version, nil
 }

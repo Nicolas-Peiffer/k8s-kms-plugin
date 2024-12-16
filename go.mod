@@ -53,7 +53,6 @@ require (
 require (
 	github.com/ThalesGroup/crypto11 v1.2.6
 	github.com/ThalesGroup/gose v0.9.0
-	github.com/blang/semver/v4 v4.0.0
 	github.com/hashicorp/go-version v1.7.0
 	k8s.io/kms v0.31.3
 )
