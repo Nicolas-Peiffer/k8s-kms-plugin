@@ -147,6 +147,7 @@ GNUTLS_SO_PIN="0000" GNUTLS_PIN="1234" p11tool \
 
 ## Start `k8s-kms-plugin serve`
 
+> [!NOTE]
 > The token created by `create-dev-token` uses label `k8s-kms-plugin-dev` and PIN `1234`.
 > Adjust `--p11-lib`, `--p11-label`, `--p11-pin` to match your environment.
 
@@ -154,9 +155,12 @@ Every example below identifies its key with `--p11-key-label`; `--p11-key-id` (P
 works the same way. See [`CKA_ID` vs `CKA_LABEL`](../cli-user-interface/cka-id-vs-cka-label.md) for
 how the two are resolved.
 
+The four commands differ only in the key they select and the family they announce — those are the
+highlighted lines.
+
 ### AES-GCM
 
-```sh
+```sh {hl_lines=[9,10]}
 SOCKET="/run/user/$(id -u)/k8s-kms-plugin.sock"
 k8s-kms-plugin \
   serve \
@@ -171,7 +175,7 @@ k8s-kms-plugin \
 
 ### AES-CBC + HMAC
 
-```sh
+```sh {hl_lines=[9,10,11]}
 SOCKET="/run/user/$(id -u)/k8s-kms-plugin.sock"
 k8s-kms-plugin \
   serve \
@@ -187,7 +191,7 @@ k8s-kms-plugin \
 
 ### RSA-OAEP
 
-```sh
+```sh {hl_lines=[9,10]}
 SOCKET="/run/user/$(id -u)/k8s-kms-plugin.sock"
 k8s-kms-plugin \
   serve \
@@ -204,7 +208,7 @@ Swap `--p11-key-label` to `dev-rsa-3072-oaep` or `dev-rsa-4096-oaep` to use the 
 
 ### ML-KEM
 
-```sh
+```sh {hl_lines=[9,10]}
 SOCKET="/run/user/$(id -u)/k8s-kms-plugin.sock"
 k8s-kms-plugin \
   serve \
@@ -244,12 +248,24 @@ Expected output:
 Review [`encryption-conf-kmsv2-unix-socket.yaml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml) and make sure
 `resources.providers.kms.endpoint` matches the socket path used by the running `k8s-kms-plugin`.
 
-Then install a Kubernetes cluster like `k3s`:
+Then point a cluster at it. Either
+[Kubernetes integration guide](../kubernetes-guides/README.md) works from here — pick whichever suits
+what you are doing:
 
-```sh
+| Guide | Why you might pick it |
+|-------|-----------------------|
+| [`KinD`](../kubernetes-guides/kind-kubernetes.md) | Nothing installed on the host; the cluster is created and deleted in one command each. Usually the quickest way to see the plugin working end to end |
+| [`k3s`](../kubernetes-guides/k3s-kubernetes.md) | A host-installed cluster. Also the guide that covers key rotation and high availability |
+
+Each guide has the full walkthrough — the socket path the apiserver needs, and how to confirm your
+Secrets really are encrypted in `etcd`. As a one-liner, `k3s` takes the config directly on the
+install command — the highlighted line is the one that wires `kube-apiserver` to the plugin:
+
+```sh {hl_lines=[3]}
 curl -sfL https://get.k3s.io | K3S_DEBUG=true INSTALL_K3S_VERSION=v1.33.1+k3s1 sh -s - \
   --write-kubeconfig-mode 660 \
   --kube-apiserver-arg=encryption-provider-config=$HOME/k8s-kms-plugin/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml
 ```
 
-See also [`k3s-kubernetes.md`](../kubernetes-guides/k3s-kubernetes.md) for a more complete Kubernetes setup guide.
+`KinD` needs the socket mounted into the node container instead, which is what its guide walks
+through.

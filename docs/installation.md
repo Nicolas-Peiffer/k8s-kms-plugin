@@ -18,8 +18,9 @@ is what the project published. Running it, and wiring a cluster to it, are cover
 [KMS v2 API](https://pkg.go.dev/k8s.io/kms/apis/v2). See the upstream
 [KMS provider documentation](https://kubernetes.io/docs/tasks/administer-cluster/kms-provider/).
 
-⚠️ `k8s-kms-plugin` **does not support KMS v1**, which is deprecated as of Kubernetes v1.28 and
-disabled by default since v1.29.
+> [!IMPORTANT]
+> `k8s-kms-plugin` **does not support KMS v1**, which is deprecated as of Kubernetes v1.28 and
+> disabled by default since v1.29.
 
 You also need a supported PKCS #11 provider holding at least one AES, RSA or ML-KEM key — see the
 [HSM & TPM guides](./hsm-guides/README.md), starting with
@@ -31,9 +32,29 @@ As of now, `k8s-kms-plugin`'s Github Action Build Recipe supports building `apk`
 Linux x86 platform. Check the different package artefacts from the [releases](https://github.com/eclipse-keysealer/k8s-kms-plugin/releases)
 tab.
 
-> 🚧 **Note**: The packages are not available on official repos yet.
+> [!NOTE]
+> The packages are not available on official repos yet.
 > And signature remains to be added in the CICD build recipe.
 > Therefore, this doc only shows local installation of the package.
+
+### What a package installs
+
+Every format installs the same four things:
+
+| Path | What it is |
+|------|------------|
+| `/usr/bin/k8s-kms-plugin` | The binary |
+| `/etc/k8s-kms-plugin/k8s-kms-plugin.config.example.yaml` | Annotated example of every configuration key, mirroring [`configs/config.example.yaml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/configs/config.example.yaml). Not read automatically — pass it with `--config`, or copy it to `$HOME/.config/k8s-kms-plugin/k8s-kms-plugin.conf.yaml` |
+| `/etc/k8s-kms-plugin/kubernetes/manifest/encryption-conf-kmsv2-unix-socket.example.yaml` | The `EncryptionConfiguration` for `kube-apiserver` — see the [Kubernetes guides](./kubernetes-guides/README.md) |
+| `/lib/systemd/system/k8s-kms-plugin.service` | A unit file for running `serve` as a system service |
+
+The unit will not start as installed: a token label, a key and a PKCS #11 library path have no
+sensible defaults, so it ships with placeholders. Replace them with `systemctl edit
+k8s-kms-plugin`, put the PIN in a root-only `EnvironmentFile` rather than on the command line where
+`ps` would show it, then `systemctl enable --now k8s-kms-plugin`. The header of
+[`configs/systemd/k8s-kms-plugin.service`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/configs/systemd/k8s-kms-plugin.service)
+walks through it, including which sandboxing directives must stay off for an HSM device node to
+remain visible.
 
 ### `apk` on Wolfi OS packages
 
@@ -143,7 +164,8 @@ slsa-verifier verify-artifact "${FILE}" \
   --source-tag "${TAG}"
 ```
 
-> ⚠️ Always pin the signing identity with `--certificate-identity` (or `--certificate-identity-regexp`)
+> [!CAUTION]
+> Always pin the signing identity with `--certificate-identity` (or `--certificate-identity-regexp`)
 > and the source with `--source-uri`. A signature verified without them only proves *somebody*
 > signed the file — which is not the question you are asking.
 
@@ -185,8 +207,9 @@ As with every other build method, do not install on musl libc if you intend to r
 
 ### Always Pin an Explicit Version
 
-⚠️ **Do not use `@latest` for now.** Go's `@latest` deliberately skips pre-releases, and the newest non-pre-release tag
-of this repository is still `v0.6.0` (February 2024). So `@latest` silently installs a two-year-old build:
+> [!WARNING]
+> **Do not use `@latest` for now.** Go's `@latest` deliberately skips pre-releases, and the newest non-pre-release tag
+> of this repository is still `v0.6.0` (February 2024). So `@latest` silently installs a two-year-old build:
 
 ```bash
 $ curl -s https://proxy.golang.org/github.com/eclipse-keysealer/k8s-kms-plugin/@latest
@@ -222,7 +245,8 @@ $ go version -m $(go env GOPATH)/bin/k8s-kms-plugin | head -3
 If you need `k8s-kms-plugin version` to report the real version, build with `make` instead (see
 [Build `k8s-kms-plugin` locally from Source with `make`](#build-k8s-kms-plugin-locally-from-source-with-make)) or download an official release artefact.
 
-> 💡 **`goenv` users**: if `go install` fails with `compile: version "goX.Y.Z" does not match go tool version "goX.Y.W"`,
+> [!TIP]
+> **`goenv` users**: if `go install` fails with `compile: version "goX.Y.Z" does not match go tool version "goX.Y.W"`,
 > your `GOROOT` environment variable is pinned to a different Go version than the `go` binary found on your `$PATH`.
 > Unset it (`env -u GOROOT go install ...`) and let the `go` command locate its own `GOROOT`.
 

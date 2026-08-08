@@ -7,7 +7,8 @@ This guide explains how to run a [`KinD`](https://kind.sigs.k8s.io/) (Kubernetes
 local `k8s-kms-plugin serve` instance listening on a unix socket, with **Podman** as the container provider
 (the Docker variant is given as well — only the cluster creation step differs).
 
-⚠️ **This guide is for testing purposes only. Do not use it in a production environment.**
+> [!CAUTION]
+> **This guide is for testing purposes only. Do not use it in a production environment.**
 
 - [Why `KinD` needs more wiring than `k3s`](#why-kind-needs-more-wiring-than-k3s)
 - [Prerequisites](#prerequisites)
@@ -131,6 +132,7 @@ Every default — cluster name, socket name, PKCS #11 library, KEK label, algori
 environment variables; run `./scripts/k8s-kind/rebuild-kms-dev.sh --help` or see
 [`scripts/k8s-kind/README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/scripts/k8s-kind/README.md) for the full list.
 
+> [!WARNING]
 > An existing cluster keeps the mounts it was created with. After changing `KMS_DEV_ROOT`, delete and recreate it:
 > `kind delete cluster --name kms-dev`.
 
@@ -151,6 +153,7 @@ directories are mounted into the node: one holding the socket, one holding the c
 mkdir -p /tmp/kms-dev/run /tmp/kms-dev/config
 ```
 
+> [!IMPORTANT]
 > The socket directory must be mounted as a **directory**, never as a single file: when the plugin restarts, the
 > socket inode is recreated, and a single-file bind mount would keep pointing at the stale, deleted inode.
 
@@ -163,8 +166,7 @@ change `endpoint:` to the in-container path:
 cp deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml /tmp/kms-dev/config/
 ```
 
-```yaml
-# /tmp/kms-dev/config/encryption-conf-kmsv2-unix-socket.yaml
+```yaml {filename="/tmp/kms-dev/config/encryption-conf-kmsv2-unix-socket.yaml",hl_lines=[10]}
 apiVersion: apiserver.config.k8s.io/v1
 kind: EncryptionConfiguration
 resources:
@@ -185,7 +187,7 @@ Save the following as `/tmp/kms-dev/config/kind.config.yaml`. It lands in the sa
 node at `/etc/kubernetes/kms` — harmless, since `kube-apiserver` only reads the file named by
 `encryption-provider-config` and ignores the rest.
 
-```yaml
+```yaml {filename="/tmp/kms-dev/config/kind.config.yaml",linenos=table,hl_lines=[6,18]}
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: kms-dev
@@ -215,6 +217,7 @@ nodes:
               pathType: DirectoryOrCreate
 ```
 
+> [!WARNING]
 > **On the missing `apiVersion:` in the kubeadm patch:** it is deliberately omitted. The kubeadm config format
 > changed from `v1beta3` to `v1beta4` starting with Kubernetes v1.36, and `v1beta4` expects `extraArgs` as a list of
 > `{name, value}` pairs instead of a map. Pinning the wrong `apiVersion` for your `kind` / node-image combination
@@ -227,7 +230,7 @@ nodes:
 
 Point `--socket` at the staging `run` directory:
 
-```sh
+```sh {hl_lines=[4]}
 k8s-kms-plugin \
   serve \
     --log-level=trace \
@@ -242,6 +245,7 @@ k8s-kms-plugin \
 Start the plugin **before** creating the cluster. `kube-apiserver` does retry its KMS connection on a background
 loop, but a missing plugin produces noisy startup errors and a temporarily unhealthy `/healthz`.
 
+> [!NOTE]
 > **On the algorithm family:** everything in this guide is algorithm-agnostic — nothing below depends on which
 > family the plugin serves, and all four families work against a **stock** `kube-apiserver`. `rsa-oaep` is used
 > here simply as a bootstrap, so that an early failure can be attributed to the `KinD` wiring rather than to the

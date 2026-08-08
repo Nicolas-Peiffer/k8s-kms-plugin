@@ -5,7 +5,8 @@ title: "Documentation"
 This folder is the documentation index for [`k8s-kms-plugin`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md). Start here when looking for a guide;
 the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md) is a short front door that links back here.
 
-> 📄 **Rendering**: these pages are rendered both by GitHub and by the documentation site
+> [!NOTE]
+> **Rendering**: these pages are rendered both by GitHub and by the documentation site
 > ([Hugo + Hextra](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/website)), which publishes `docs/` and nothing else. Three link
 > conventions keep them working in both places:
 >
@@ -47,10 +48,11 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 | Check a download is genuine                                 | [Verify what you downloaded](./installation.md#verify-what-you-downloaded) |
 | Look up a command, a flag or its environment variable       | [CLI reference](./cli-user-interface/README.md) |
 | Understand what actually happens to my Secrets              | [Concepts & Architecture](./overview.md), then [Cryptographic Schemes](./cryptographic-schemes.md) |
-| Rotate a KEK                                                | [Key Rotation Support](./overview.md#key-rotation-support), and [`k3s`](./kubernetes-guides/k3s-kubernetes.md) for a worked example |
+| Rotate a KEK                                                | [Key Rotation Support](./overview.md#key-rotation-support) for how it works; the [`k3s` guide](./kubernetes-guides/k3s-kubernetes.md) happens to be where a worked example is written up |
 | Test the gRPC API without a cluster, or stage a `KinD` env  | [Helper tools & scripts](#helper-tools--scripts) below |
 | Debug the plugin                                            | [Debug Environment](./development.md#debug-environment-) |
 | Verify a release's signature or SLSA provenance             | [Supply Chain Security](./supply-chain-security.md) |
+| Look up an acronym or a term                                | [Glossary](./glossary.md) |
 
 ## Getting started
 
@@ -66,6 +68,7 @@ Then, as you need them:
 | Page | What it covers |
 |------|----------------|
 | [Installation](./installation.md) | Getting a release binary or package, verifying it, `go install`, building from source, container images |
+| [Glossary](./glossary.md) | Every acronym and term used here, from DEK and KEK to ML-KEM's encapsulation key |
 | [`CHANGELOG.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/CHANGELOG.md) | Release history |
 
 ## Concepts & architecture
@@ -170,11 +173,17 @@ has the short version if you only want to check a download.
 
 ## Helper tools & scripts
 
-| Tool | Purpose |
-|------|---------|
-| [`tools/create-dev-token/`](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/tools/create-dev-token/) | Bootstraps a SoftHSM token with one ready-to-use key per algorithm family |
-| [`scripts/k8s-kind/`](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/scripts/k8s-kind/) | Stages the `KinD` cluster config and `EncryptionConfiguration` |
-| [`scripts/grpcurl/`](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/scripts/grpcurl/) | Exercises the KMS v2 API (`Status`, `Encrypt`, `Decrypt`) without a cluster |
+Development and testing helpers that ship with the repository — none is part of the deployable.
+Documented in **[`tools-and-scripts/`](./tools-and-scripts/README.md)**.
+
+| Helper | What it does |
+|--------|--------------|
+| [`create-dev-token`](./tools-and-scripts/create-dev-token.md) | A persistent SoftHSM token with one key per algorithm family, ready for `serve` — no hardware needed |
+| [`grpcurl` round-trip scripts](./tools-and-scripts/grpcurl-scripts.md) | Drive `Status`, `Encrypt` and `Decrypt` against a running plugin with no cluster involved, including a key-rotation round trip |
+| [`KinD` staging script](./tools-and-scripts/k8s-kind-scripts.md) | Stages the directories, `EncryptionConfiguration` and `kind.config.yaml` a `KinD` cluster needs |
+
+They compose into a fast loop: get a token, prove the plugin encrypts and decrypts, then bring a
+cluster into it — each step independent of the next.
 
 ## Diagrams & images
 
@@ -202,8 +211,9 @@ podman run --rm -v "$PWD/docs/puml-diagrams:/data:z" -w /data \
   docker.io/plantuml/plantuml:latest -tsvg 'kmsv2-*.puml'
 ```
 
-⚠️ PlantUML names its output after the `@startuml "<name>"` title, **not** after the source file, so rename the
-results back to the tracked `kmsv2-*.sqce-diag.svg` names (or use the VS Code PlantUML extension, which keeps the
-source file name). The class diagrams (`cbc-class.puml`, `gcm-class.puml`, `rsa-class.puml`,
-`ml-kem-class.puml`) use an unnamed `@startuml`, so PlantUML already names their output after the source
-file and no renaming is needed.
+> [!WARNING]
+> PlantUML names its output after the `@startuml "<name>"` title, **not** after the source file, so rename the
+> results back to the tracked `kmsv2-*.sqce-diag.svg` names (or use the VS Code PlantUML extension, which keeps the
+> source file name). The class diagrams (`cbc-class.puml`, `gcm-class.puml`, `rsa-class.puml`,
+> `ml-kem-class.puml`) use an unnamed `@startuml`, so PlantUML already names their output after the source
+> file and no renaming is needed.

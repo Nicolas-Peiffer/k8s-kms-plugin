@@ -38,7 +38,8 @@ Two of them regenerate tracked files, so re-run them when the relevant source ch
 `PKCS11_PIN` is optional (default `1234`). ML-KEM tests need SoftHSMv3 — see [`docs/softhsm-v3.md`](./hsm-guides/softhsm-v3.md);
 the AES and RSA paths also work with SoftHSMv2.
 
-> ⚠️ Without `PKCS11_MODULE` both suites exit **immediately and successfully**, printing only a skip notice. A green
+> [!WARNING]
+> Without `PKCS11_MODULE` both suites exit **immediately and successfully**, printing only a skip notice. A green
 > run therefore does **not** mean the PKCS #11 paths were exercised — always check that the variable is set.
 
 **`grpcurl`** is required by the end-to-end suite only: it drives the KMS v2 gRPC API over the plugin's unix socket,
@@ -88,7 +89,8 @@ go mod tidy
 make build
 ```
 
-> ⚠️ Restore the published module versions in `go.mod` / `go.sum` before opening a pull request — branch
+> [!IMPORTANT]
+> Restore the published module versions in `go.mod` / `go.sum` before opening a pull request — branch
 > pseudo-versions must not reach `master`.
 
 ## Debug Environment 🐛
@@ -118,7 +120,7 @@ Install the [Go extension](https://marketplace.visualstudio.com/items?itemName=g
 `.vscode/` is git-ignored, so each developer keeps their own configurations. Create `.vscode/launch.json` with the
 configurations you need — the three below cover the usual cases:
 
-```jsonc
+```jsonc {filename=".vscode/launch.json",linenos=table,hl_lines=[5,6,28,29,44,45]}
 {
   "version": "0.2.0",
   "configurations": [
@@ -193,8 +195,7 @@ A few traps specific to this project:
   [integration](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/test/integration/) and [e2e](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/test/e2e/) suites need `PKCS11_MODULE` — supply it via
   `"go.testEnvVars"` in `.vscode/settings.json`, or point `"go.testEnvFile"` at a `.env` file:
 
-```jsonc
-// .vscode/settings.json
+```jsonc {filename=".vscode/settings.json"}
 {
   "go.testEnvFile": "${workspaceFolder}/.env"
 }

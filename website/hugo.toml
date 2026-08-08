@@ -79,7 +79,17 @@ disableKinds = ['taxonomy', 'term']
   [[module.mounts]]
     source = '../docs'
     target = 'content/docs'
-    files = ['! README.md', '! **/README.md', '! **/*.bkp', '**']
+    files = ['! README.md', '! **/README.md', '! termbase.yaml', '! **/*.bkp', '**']
+
+  # The glossary. Hextra's `glossary` layout builds its <dl> from a Hugo DATA file — site.Data.<lang>
+  # .termbase — and ignores the page body, so the terms have to arrive as data rather than content.
+  # Mounting docs/termbase.yaml here keeps them in docs/ with everything else instead of stranding
+  # them under website/, and docs/glossary.md is generated from the same file so GitHub renders the
+  # terms too (`make glossary`; CI checks it). The file is excluded from the content mount above —
+  # otherwise it would also be published as a page resource.
+  [[module.mounts]]
+    source = '../docs/termbase.yaml'
+    target = 'data/en/termbase.yaml'
 
   [[module.mounts]]
     source = '../docs/README.md'
@@ -92,6 +102,10 @@ disableKinds = ['taxonomy', 'term']
   [[module.mounts]]
     source = '../docs/kubernetes-guides/README.md'
     target = 'content/docs/kubernetes-guides/_index.md'
+
+  [[module.mounts]]
+    source = '../docs/tools-and-scripts/README.md'
+    target = 'content/docs/tools-and-scripts/_index.md'
 
   [[module.mounts]]
     source = '../docs/cli-user-interface/README.md'
@@ -115,6 +129,11 @@ disableKinds = ['taxonomy', 'term']
     target = 'static'
 
 [markup]
+  # Code fences carry Hextra attributes — ```yaml {filename="…",linenos=table,hl_lines=[6,18]} —
+  # which Hugo parses itself from the fence info string and passes to the theme's codeblock render
+  # hook. That needs NO [markup.goldmark.parser.attribute] setting: `block = true` governs attributes
+  # on *other* block elements and is irrelevant here, so do not add it expecting fences to depend on
+  # it. See website/README.md for when to use each attribute.
   [markup.goldmark]
     [markup.goldmark.renderer]
       # Required. The documentation uses <details>/<summary> for collapsible sections and a few

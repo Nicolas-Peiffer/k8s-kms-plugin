@@ -1,14 +1,32 @@
 # `k8s-kms-plugin` 🔐
 
-[![Licence](https://img.shields.io/github/license/Ileriayo/markdown-badges?style=for-the-badge)](./LICENSE)
-[![Go Reference](https://pkg.go.dev/badge/github.com/eclipse-keysealer/k8s-kms-plugin.svg)](https://pkg.go.dev/github.com/eclipse-keysealer/k8s-kms-plugin)
-[![Build](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/ci.yml)
-[![Lint](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/lint.yml/badge.svg)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/lint.yml)
-[![Secret Scan](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/secret-scan.yml)
-[![Release](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/release.yml/badge.svg)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/release.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/eclipse-keysealer/k8s-kms-plugin/badge)](https://scorecard.dev/viewer/?uri=github.com/eclipse-keysealer/k8s-kms-plugin)
-[![GitHub release](https://img.shields.io/github/v/release/eclipse-keysealer/k8s-kms-plugin)](https://github.com/eclipse-keysealer/k8s-kms-plugin/releases/latest)
-[![Changelog](https://img.shields.io/badge/changelog-v1.0.0-blue)](./CHANGELOG.md)
+<!-- Badges: every one is drawn by shields.io with style=flat-square, so they share a height, a
+     typeface and a corner radius. GitHub's own actions/workflows/*/badge.svg, pkg.go.dev's badge and
+     api.scorecard.dev's badge each render at their own metrics and take no style parameter, which is
+     why the shields.io equivalents are used instead. The two rows are deliberate: what the project
+     is, then whether it is healthy.
+
+     FORK-LOCAL: the documentation badge and the docs workflow badge below, and the site links in the
+     Documentation section, point at THIS FORK because upstream has no Pages site and no docs.yml
+     workflow yet. Everything else in this repository uses absolute eclipse-keysealer URLs on purpose.
+
+     BEFORE OPENING A PULL REQUEST UPSTREAM, switch them back:
+       nicolas-peiffer.github.io/k8s-kms-plugin -> eclipse-keysealer.github.io/k8s-kms-plugin
+       github.com/Nicolas-Peiffer/...           -> github.com/eclipse-keysealer/...
+     The other place carrying a fork URL is website/hugo.toml's baseURL, which is only a local-dev
+     default — the Docs workflow computes the real one from the repository that runs the build. -->
+[![Documentation](https://img.shields.io/badge/documentation-online-1f6feb?style=flat-square&logo=hugo&logoColor=white)](https://nicolas-peiffer.github.io/k8s-kms-plugin/)
+[![Licence](https://img.shields.io/github/license/eclipse-keysealer/k8s-kms-plugin?style=flat-square&logo=opensourceinitiative&logoColor=white&color=1f6feb)](./LICENSE)
+[![Go Reference](https://img.shields.io/badge/pkg.go.dev-reference-007d9c?style=flat-square&logo=go&logoColor=white)](https://pkg.go.dev/github.com/eclipse-keysealer/k8s-kms-plugin)
+[![Release](https://img.shields.io/github/v/release/eclipse-keysealer/k8s-kms-plugin?style=flat-square&logo=github&logoColor=white&color=1f6feb)](https://github.com/eclipse-keysealer/k8s-kms-plugin/releases/latest)
+[![Changelog](https://img.shields.io/badge/changelog-read-1f6feb?style=flat-square&logo=markdown&logoColor=white)](./CHANGELOG.md)
+
+[![Build](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/ci.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=build)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/ci.yml)
+[![Lint](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/lint.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=lint)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/lint.yml)
+[![Secret scan](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/secret-scan.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=secret%20scan)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/secret-scan.yml)
+[![Release build](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/release.yml?style=flat-square&logo=githubactions&logoColor=white&label=release%20build)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/release.yml)
+[![Docs site](https://img.shields.io/github/actions/workflow/status/Nicolas-Peiffer/k8s-kms-plugin/docs.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=docs)](https://github.com/Nicolas-Peiffer/k8s-kms-plugin/actions/workflows/docs.yml)
+[![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/eclipse-keysealer/k8s-kms-plugin?style=flat-square&logo=openssf&logoColor=white&label=openssf%20scorecard)](https://scorecard.dev/viewer/?uri=github.com/eclipse-keysealer/k8s-kms-plugin)
 
 `k8s-kms-plugin serve` implements the [Kubernetes KMS v2 API](https://pkg.go.dev/k8s.io/kms/apis/v2) protocol as a gRPC service that leverages a remote or local HSM via PKCS11.
 `k8s-kms-plugin serve rotation` supports key rotation operations.
@@ -25,10 +43,12 @@ operations run inside the HSM — see [Cryptographic Schemes](./docs/cryptograph
 
 This plugin will also run in proxy mode which can connect to a remote plugin service running in a secure network device (Key Managers)
 
-> ⚠️ **Droping support of KMS v1**: Newer (after 2025) version of the `k8s-kms-plugin` droped support for [Kubernetes KMSv1](https://pkg.go.dev/k8s.io/kms@v0.34.1/apis/v1beta1),
+> [!IMPORTANT]
+> **Droping support of KMS v1**: Newer (after 2025) version of the `k8s-kms-plugin` droped support for [Kubernetes KMSv1](https://pkg.go.dev/k8s.io/kms@v0.34.1/apis/v1beta1),
 > as KMSv1 is deprecated in Kubernetes v1.28 and disabled by default since Kubernetes v1.29.
 
-> 🚧 **Note**: This documentation is under construction and needs to be updated to remove/archive references to KMS v1 and
+> [!NOTE]
+> This documentation is under construction and needs to be updated to remove/archive references to KMS v1 and
 > document KMS v2 operations.
 
 # Part of Eclipse KeySealer
@@ -46,12 +66,19 @@ throwaway Kubernetes cluster:
 1. [SoftHSMv3 (`pqctoday-hsm`) & `k8s-kms-plugin`](./docs/hsm-guides/softhsm-v3.md) — **recommended** HSM: supports all algorithm families including ML-KEM
 2. [`KinD` & `k8s-kms-plugin`](./docs/kubernetes-guides/kind-kubernetes.md) — **recommended** cluster: single-node Kubernetes on Podman or Docker, deleted in one command
 
-Other HSMs & TPMs (Thales eToken Fusion, YubiHSM 2, SoftHSMv2, TPM emulator) and the `k3s` integration are listed in
-the documentation index: [`docs/README.md`](./docs/README.md).
+Other HSMs and TPMs (Thales eToken Fusion, YubiHSM 2, SoftHSMv2, TPM emulator), and the other
+Kubernetes distribution guide (`k3s`), are indexed in [`docs/README.md`](./docs/README.md).
 
 # Documentation 📚
 
-The full documentation lives in [`docs/`](./docs/README.md). Start here:
+<!-- FORK-LOCAL: see the note beside the badges at the top — these two links point at this fork and
+     must be switched to eclipse-keysealer.github.io before a pull request upstream. -->
+📖 **Browse it online: [nicolas-peiffer.github.io/k8s-kms-plugin](https://nicolas-peiffer.github.io/k8s-kms-plugin/)**
+— searchable, with a sidebar and a [glossary](https://nicolas-peiffer.github.io/k8s-kms-plugin/docs/glossary/).
+
+The same pages live in [`docs/`](./docs/README.md) and render here on GitHub, so either surface works.
+A fork publishes its own copy at `https://<owner>.github.io/<repository>/` once its Docs workflow has
+run. Start here:
 
 | Guide | What it covers |
 |-------|----------------|
@@ -61,6 +88,7 @@ The full documentation lives in [`docs/`](./docs/README.md). Start here:
 | [HSM & TPM guides](./docs/hsm-guides/README.md) | One page per PKCS #11 provider — software and hardware — plus the matrix of which algorithm families and key sizes were tested on each |
 | [Kubernetes integration guides](./docs/kubernetes-guides/README.md) | Making a cluster's `kube-apiserver` encrypt Secrets through the plugin: `KinD` and `k3s` |
 | [CLI reference](./docs/cli-user-interface/README.md) | Help output, shell completion, configuration precedence, and the generated [per-command reference](./docs/cli-user-interface/markdown/README.md) and [flag / environment variable / config key table](./docs/cli-user-interface/markdown/cli-env-var-table.md) |
+| [Helper tools & scripts](./docs/tools-and-scripts/README.md) | `create-dev-token` for a ready-made SoftHSM token, `grpcurl` scripts to drive the API without a cluster, and the `KinD` staging script |
 | [Development & Debugging](./docs/development.md) | Repository layout, running the three test suites, building against `crypto11`/`gose` branches, `delve` and `vscode` debugging |
 | [Supply Chain Security](./docs/supply-chain-security.md) | Vulnerability scanning, release signing, and verifying artifacts, container images and SLSA provenance |
 

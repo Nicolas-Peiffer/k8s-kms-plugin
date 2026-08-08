@@ -3,7 +3,8 @@ title: "SoftHSMv2"
 weight: 20
 ---
 
-> ⚠️ **Legacy reference**: This guide is kept for backward compatibility. [`SoftHSMv3` (`pqctoday-hsm`)](./softhsm-v3.md) is now the recommended software HSM for development and integration testing — it supports all algorithm families including **ML-KEM**. SoftHSMv2 does **not** support ML-KEM.
+> [!NOTE]
+> **Legacy reference**: This guide is kept for backward compatibility. [`SoftHSMv3` (`pqctoday-hsm`)](./softhsm-v3.md) is now the recommended software HSM for development and integration testing — it supports all algorithm families including **ML-KEM**. SoftHSMv2 does **not** support ML-KEM.
 
 This guide describes how to set up [`SoftHSMv2`](https://github.com/softhsm/SoftHSMv2) and make it
 work with the `k8s-kms-plugin` in a **non production environment**.
@@ -152,16 +153,26 @@ If `grpcurl-roundtrip-test.sh` works, it should work with a kubernetes server no
 Then review the content of file [`encryption-conf-kmsv2-unix-socket.yaml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml).
 Make sure `resources.providers.kms.endpoint` points to the same unix socket file of the running `k8s-kms-plugin`.
 
-Then install a kubernetes cluster like `k3s` with the following command:
+Then point a cluster at it, following either
+[Kubernetes integration guide](../kubernetes-guides/README.md):
+[`KinD`](../kubernetes-guides/kind-kubernetes.md) installs nothing on the host and is deleted in one
+command, while [`k3s`](../kubernetes-guides/k3s-kubernetes.md) runs on the host and is where key
+rotation and HA are documented.
 
-```bash
+`k3s` takes the configuration directly on its install command — the highlighted line is the one that
+wires `kube-apiserver` to the plugin:
+
+```bash {hl_lines=[3]}
 curl -sfL https://get.k3s.io | K3S_DEBUG=true INSTALL_K3S_VERSION=v1.33.1+k3s1 sh -s - \
   --write-kubeconfig-mode 660 \
   --kube-apiserver-arg=encryption-provider-config=$HOME/k8s-kms-plugin/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml
 ```
 
+`KinD` needs the socket mounted into the node container instead — see its guide.
+
 ## Using Env Vars Thanks to Viper
 
+> [!NOTE]
 > TODO: improve this section and harmonise the previous section to use viper's env vars
 
 Have a look at this [table](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/docs/cli-user-interface/txt/cli-env-var-table.txt) which explains how to use environment variables with the `k8s-kms-plugin`.
