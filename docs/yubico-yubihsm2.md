@@ -253,16 +253,20 @@ connector = http://127.0.0.1:12345
 Now you have everything to run `k8s-kms-plugin serve` with the YubiHSM 2 using the network connector:
 
 ```bash
-k8s-kms-plugin
+k8s-kms-plugin \
   serve \
     --log-level=trace \
     --p11-lib /usr/lib64/pkcs11/yubihsm_pkcs11.so  \
     --p11-label YubiHSM \
     --p11-pin  0001password \
-    --kek-id  abcd \
-    --algorithm  rsa-oaep \
+    --p11-key-id  abcd \
+    --algorithm-family  rsa-oaep \
     --socket /run/user/1000/k8s-kms-plugin.sock
 ```
+
+`--p11-key-label` (PKCS #11 `CKA_LABEL`) works the same way as `--p11-key-id` (PKCS #11 `CKA_ID`)
+above. See [`CKA_ID` vs `CKA_LABEL`](./cli-user-interface/cka-id-vs-cka-label.md) for how the two are
+resolved.
 
 Now fetch the protobuf API file `api.proto` from https://github.com/kubernetes/kms:
 
@@ -439,7 +443,7 @@ You can also test a full Status, Encryption and Decryption roundtrip using the s
           --p11-label YubiHSM \
           --p11-pin 0001password \
           --p11-key-label rsa4096n001 \
-          --algorithm rsa-oaep
+          --algorithm-family rsa-oaep
   ```
 
   <details>

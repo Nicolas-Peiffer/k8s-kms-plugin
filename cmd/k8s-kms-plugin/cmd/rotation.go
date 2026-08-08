@@ -1,31 +1,28 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
 package cmd
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net"
 	"os"
-	"strconv"
 	"time"
 
-	"github.com/ThalesGroup/crypto11"
-	"github.com/ThalesGroup/k8s-kms-plugin/pkg/providers"
-	"github.com/ThalesGroup/k8s-kms-plugin/pkg/version"
-	"github.com/sirupsen/logrus"
+	"github.com/eclipse-keypont/crypto11/v2"
+	"github.com/eclipse-keypont/gose/jose"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	k8skmsv2 "k8s.io/kms/apis/v2"
+
+	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/logging"
+	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/providers"
+	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/version"
 )
 
 // ViperFlagsRotation defines a struct to hold the values of cobra CLI flags and use viper to populate them
@@ -33,16 +30,14 @@ import (
 // Use ViperFlagsServe for the current new KEK.
 type ViperFlagsRotation struct {
 	// PKCS #11 & KMS plugin parameters
-	OldAlgorithm  string `mapstructure:"old-algorithm"`
-	OldCaID       string `mapstructure:"old-ca-id"`
-	OldCaTLSCert  string `mapstructure:"old-tls-ca"`
-	OldNativePath string `mapstructure:"old-native-path"`
-	OldP11Label   string `mapstructure:"old-p11-label"`
-	OldP11Lib     string `mapstructure:"old-p11-lib"`
-	OldP11Pin     string `mapstructure:"old-p11-pin"`
-	OldP11Slot    int    `mapstructure:"old-p11-slot"`
-	OldProvider   string `mapstructure:"old-provider"`
-	OldSocketPath string `mapstructure:"old-socket"` // Unix socket path for TPM or HSM
+	OldAlgorithmFamily string `mapstructure:"old-algorithm-family"`
+	OldNativePath      string `mapstructure:"old-native-path"`
+	OldP11Label        string `mapstructure:"old-p11-label"`
+	OldP11Lib          string `mapstructure:"old-p11-lib"`
+	OldP11Pin          string `mapstructure:"old-p11-pin"`
+	OldP11Slot         int    `mapstructure:"old-p11-slot"`
+	OldProvider        string `mapstructure:"old-provider"`
+	OldSocketPath      string `mapstructure:"old-socket"` // Unix socket path for old KEK HSM
 
 	// CKA_ID and CKA_LABEL
 	OldDekKeyLabel  string `mapstructure:"old-p11-key-label"`
@@ -64,6 +59,9 @@ Refer to the kubernetes KMS v2 documentation for more details about key rotation
 https://kubernetes.io/docs/tasks/administer-cluster/kms-provider/#developing-a-kms-plugin-gRPC-server-notes-kms-v2
 
 KMS v2 API: https://pkg.go.dev/k8s.io/kms@v0.34.1/apis/v2
+
+How --old-p11-key-id / --old-p11-key-label (and --old-p11-hmac-id / --old-p11-hmac-label) are resolved:
+docs/cli-user-interface/cka-id-vs-cka-label.md
 `,
 	Example: `
 Using flags and serving on unix socket (gRPC plaintext):
@@ -92,7 +90,7 @@ Using both CLI Flags, environment variables and configuration file and serving o
 	`,
 	// Initialize and populate cobra CLI flags values with viper during the Persistent pre-run
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Manually call parent’s PersistentPreRunE
+		// Manually call parent's PersistentPreRunE
 		if cmd.Parent() != nil && cmd.Parent().PersistentPreRunE != nil {
 			if err := cmd.Parent().PersistentPreRunE(cmd.Parent(), args); err != nil {
 				return err
@@ -100,14 +98,24 @@ Using both CLI Flags, environment variables and configuration file and serving o
 		}
 
 		if err := InitViperSubCmdE(viper.GetViper(), cmd, &vprFlgsRotation); err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).WithError(err).Error("Error initializing Viper")
+			slog.Error("Error initializing Viper", "cobra_cmd", cmd.Use, "error", err)
+			return err
+		}
+		if err := sanitizeViperFlagsRotation(&vprFlgsRotation); err != nil {
 			return err
 		}
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) (err error) {
+	RunE: func(cmd *cobra.Command, _ []string) (err error) {
 		// Show the version of the k8s-kms-plugin and commit ID
-		version.LogrusOutputVersion()
+		version.LogVersion()
+
+		if vprFlgsServe.P11Pin, err = resolvePin(viper.GetViper(), "p11-pin", "Enter HSM PIN: "); err != nil {
+			return
+		}
+		if vprFlgsRotation.OldP11Pin, err = resolvePin(viper.GetViper(), "old-p11-pin", "Enter old KEK HSM PIN: "); err != nil {
+			return
+		}
 
 		// provider for the KEK that is being rotated, aka the old KEK
 		var p providers.Provider
@@ -116,51 +124,28 @@ Using both CLI Flags, environment variables and configuration file and serving o
 		if err != nil && providers.IsPKCS11AuthenticationError(err) {
 			// Don't panic/exit if we have a PKCS#11 error.
 			// Sleep forever instead.
-			logrus.WithField("cobra-cmd", cmd.Use).
-				WithError(err).
-				Error("PKCS11 authentication error detected. Further retries may cause the token to be erased.")
-			logrus.WithField("cobra-cmd", cmd.Use).Warn("Process will now sleep indefinitely to prevent further damage...")
+			slog.Error("PKCS11 authentication error detected. Further retries may cause the token to be erased.", "cobra_cmd", cmd.Use, "error", err)
+			slog.Warn("Process will now sleep indefinitely to prevent further damage...", "cobra_cmd", cmd.Use)
 			time.Sleep(8760 * time.Hour)
 		}
 
 		if err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).WithError(err).Fatal("failed to initialize rotated provider for old KEK")
+			logging.Fatal("failed to initialize rotated provider for old KEK", "cobra_cmd", cmd.Use, "error", err)
 		}
 
-		if err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).WithError(err).Fatal("failed to initialize provider for new KEK")
+		_ = os.Remove(vprFlgsServe.SocketPath)
+		var grpcUNIX net.Listener
+		if grpcUNIX, err = net.Listen("unix", vprFlgsServe.SocketPath); err != nil {
+			return
+		}
+		// Grant group read/write so a co-located client (e.g. kube-apiserver
+		// running under a shared gid) can connect to the socket.
+		if err := os.Chmod(vprFlgsServe.SocketPath, 0775); err != nil { //nolint:gosec // group access is intentional, see comment above
+			slog.Error("error setting socket permissions", "path", vprFlgsServe.SocketPath, "error", err)
 		}
 
-		// gRPC server
-		g := new(errgroup.Group)
-		var grpcTCP, grpcUNIX net.Listener
-
-		if vprFlgsServe.EnableTCP {
-			// vprFlgsServe.Port needs to be converted from uint16 to string
-			grpcAddr := net.JoinHostPort(vprFlgsServe.Host, strconv.FormatUint(uint64(vprFlgsServe.Port), 10))
-
-			if grpcTCP, err = net.Listen("tcp", grpcAddr); err != nil {
-				return
-			}
-
-			g.Go(func() error { return grpcRotation(grpcTCP, p) })
-		}
-
-		if !vprFlgsServe.DisableSocket {
-			_ = os.Remove(vprFlgsServe.SocketPath)
-			if grpcUNIX, err = net.Listen("unix", vprFlgsServe.SocketPath); err != nil {
-				return
-			}
-
-			// Istiod runs with uid and gid 1337, but the plugin runs with uid 0 and
-			// gid 1337.  Change the socket permissions so the group has read/write
-			// access to the socket.
-			os.Chmod(vprFlgsServe.SocketPath, 0775)
-			g.Go(func() error { return grpcRotation(grpcUNIX, p) })
-		}
-
-		if err = g.Wait(); err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).Error(err)
+		if err = grpcRotation(grpcUNIX, p); err != nil {
+			slog.Error("gRPC server error", "cobra_cmd", cmd.Use, "error", err)
 		}
 
 		return nil
@@ -170,20 +155,27 @@ Using both CLI Flags, environment variables and configuration file and serving o
 func init() {
 	serveCmd.AddCommand(rotationCmd)
 
-	rotationCmd.Flags().String("old-algorithm", "", "Set the algorithm for the old KEK")
-	rotationCmd.Flags().String("old-ca-id", "", "Cert ID for old CA Cert record")
-	rotationCmd.Flags().String("old-tls-ca", "", "TLS CA cert for old KEK")
+	oldAlgFamilyDefault := AlgorithmFamilyAESGCM
+	rotationCmd.Flags().Var(&oldAlgFamilyDefault, "old-algorithm-family", "Encryption mechanism of the old KEK. Possible values: aes-gcm, aes-cbc, rsa-oaep, ml-kem.")
+	if err := rotationCmd.RegisterFlagCompletionFunc("old-algorithm-family", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"aes-gcm", "aes-cbc", "rsa-oaep", "ml-kem"}, cobra.ShellCompDirectiveNoFileComp
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "old-algorithm-family", "error", err)
+	}
+	if err := rotationCmd.MarkFlagRequired("old-algorithm-family"); err != nil {
+		slog.Error("error marking flag required", "flag", "old-algorithm-family", "error", err)
+	}
 	rotationCmd.Flags().String("old-native-path", "", "Native path for old KEK")
 	rotationCmd.Flags().String("old-p11-label", "", "P11 token label for old KEK")
 	rotationCmd.Flags().String("old-p11-lib", "", "Path to P11 library/client for old KEK")
-	rotationCmd.Flags().String("old-p11-pin", "", "P11 Pin for old KEK")
+	rotationCmd.Flags().String("old-p11-pin", "", "HSM PIN for old KEK. If omitted, prompted interactively (input hidden). Pass an empty string explicitly to use a no-PIN token.")
 
 	rotationCmd.Flags().Int("old-p11-slot", 0, "P11 token slot for old KEK")
 	rotationCmd.Flags().String("old-provider", "p11", "Provider for old KEK")
 	rotationCmd.Flags().String("old-socket", "", "Unix socket path for old KEK")
-	rotationCmd.Flags().String("old-p11-key-label", "", "Key Label CKA_LABEL for old KEK")
+	rotationCmd.Flags().String("old-p11-key-label", "", "Key Label (CKA_LABEL) for the old KEK. The key must have a CKA_ID set on the HSM.")
 	rotationCmd.Flags().String("old-p11-hmac-id", "", "Key ID CKA_ID for old KEK HMAC")
-	rotationCmd.Flags().String("old-p11-hmac-label", "", "Key Label CKA_LABEL for old KEK HMAC")
+	rotationCmd.Flags().String("old-p11-hmac-label", "", "Key Label (CKA_LABEL) for the old KEK HMAC. The key must have a CKA_ID set on the HSM.")
 	rotationCmd.Flags().String("old-p11-key-id", "", "Key ID CKA_ID for old KEK")
 
 	// At least one of the old KEK CKA_ID or old CKA_LABEL must be provided by the user
@@ -195,19 +187,32 @@ func init() {
 	rotationCmd.MarkFlagsMutuallyExclusive("old-p11-hmac-id", "old-p11-hmac-label")
 }
 
-func initRotatedProvider() (pRot providers.Provider, err error) {
-	// Active key
-	// init the algorithm to use in the kms from user input
-	activeAlg, err := algFromString(vprFlgsServe.Algorithm)
-	if err != nil {
-		return
+// sanitizeViperFlagsRotation validates all user-controlled fields in ViperFlagsRotation.
+func sanitizeViperFlagsRotation(f *ViperFlagsRotation) error {
+	if err := validateAlgorithmFamily(f.OldAlgorithmFamily); err != nil {
+		return fmt.Errorf("--old-algorithm-family: %w", err)
 	}
+	if len(f.OldP11Label) > maxCkaLabelBytes {
+		return fmt.Errorf("--old-p11-label: length %d exceeds maximum of %d bytes", len(f.OldP11Label), maxCkaLabelBytes)
+	}
+	if len(f.OldDekKeyLabel) > maxCkaLabelBytes {
+		return fmt.Errorf("--old-p11-key-label: length %d exceeds maximum of %d bytes", len(f.OldDekKeyLabel), maxCkaLabelBytes)
+	}
+	if len(f.OldHmacKeyLabel) > maxCkaLabelBytes {
+		return fmt.Errorf("--old-p11-hmac-label: length %d exceeds maximum of %d bytes", len(f.OldHmacKeyLabel), maxCkaLabelBytes)
+	}
+	return nil
+}
+
+func initRotatedProvider() (pRot providers.Provider, err error) {
+	// Active key — validated by sanitizeViperFlagsServe; cast directly to provider sentinel.
+	activeAlg := jose.Alg(vprFlgsServe.AlgorithmFamily)
 
 	// init the provider activeConfig from user input
 	activeConfig := &crypto11.Config{}
 	switch vprFlgsServe.Provider {
 	case "p11", "softhsm":
-		logrus.Debug("initProvider: case p11 or softhsm")
+		slog.Log(context.Background(), logging.LevelTrace, "initProvider: case p11 or softhsm")
 		activeConfig = &crypto11.Config{
 			Path:            vprFlgsServe.P11Lib,
 			Pin:             vprFlgsServe.P11Pin,
@@ -215,7 +220,7 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 		}
 
 	case "luna", "dpod":
-		logrus.Debug("initProvider: case luna HSM or dpod")
+		slog.Log(context.Background(), logging.LevelTrace, "initProvider: case luna HSM or dpod")
 		activeConfig = &crypto11.Config{
 			Path:            vprFlgsServe.P11Lib,
 			Pin:             vprFlgsServe.P11Pin,
@@ -226,7 +231,7 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 			},
 		}
 	default:
-		logrus.WithField("provider", vprFlgsServe.Provider).Error("unknown provider")
+		slog.Error("unknown provider", "provider", vprFlgsServe.Provider)
 		err = errors.New("unknown provider")
 		return
 	}
@@ -237,18 +242,14 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 		activeConfig.SlotNumber = &vprFlgsServe.P11Slot
 	}
 
-	// Rotated old key
-	// init the algorithm to use in the kms from user input
-	rotatedAlg, err := algFromString(vprFlgsRotation.OldAlgorithm)
-	if err != nil {
-		return
-	}
+	// Rotated old key — validated by sanitizeViperFlagsRotation; cast directly to provider sentinel.
+	rotatedAlg := jose.Alg(vprFlgsRotation.OldAlgorithmFamily)
 
 	// init the provider oldConfig from user input
 	oldConfig := &crypto11.Config{}
 	switch vprFlgsRotation.OldProvider {
 	case "p11", "softhsm":
-		logrus.Debug("initProvider: case p11 or softhsm")
+		slog.Log(context.Background(), logging.LevelTrace, "initProvider: case p11 or softhsm")
 		oldConfig = &crypto11.Config{
 			Path:            vprFlgsRotation.OldP11Lib,
 			Pin:             vprFlgsRotation.OldP11Pin,
@@ -256,7 +257,7 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 		}
 
 	case "luna", "dpod":
-		logrus.Debug("initProvider: case luna HSM or dpod")
+		slog.Log(context.Background(), logging.LevelTrace, "initProvider: case luna HSM or dpod")
 		oldConfig = &crypto11.Config{
 			Path:            vprFlgsRotation.OldP11Lib,
 			Pin:             vprFlgsRotation.OldP11Pin,
@@ -267,7 +268,7 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 			},
 		}
 	default:
-		logrus.WithField("provider", vprFlgsRotation.OldProvider).Error("unknown provider")
+		slog.Error("unknown provider", "provider", vprFlgsRotation.OldProvider)
 		err = errors.New("unknown provider")
 		return
 	}
@@ -278,7 +279,7 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 		oldConfig.SlotNumber = &vprFlgsRotation.OldP11Slot
 	}
 	// init the provider
-	// TODO: See https://github.com/ThalesGroup/k8s-kms-plugin/issues/40#issuecomment-2593267852
+	// TODO: See https://github.com/eclipse-keysealer/k8s-kms-plugin/issues/40#issuecomment-2593267852
 	if pRot, err = providers.NewP11(
 		oldConfig,
 		vprFlgsServe.CreateKey,
@@ -301,7 +302,7 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 }
 
 func grpcRotation(gl net.Listener, p providers.Provider) (err error) {
-	logrus.Trace("grpcRotation")
+	slog.Log(context.Background(), logging.LevelTrace, "grpcRotation")
 
 	// Create a gRPC server to host the services
 	serverOptions := []grpc.ServerOption{
@@ -313,12 +314,11 @@ func grpcRotation(gl net.Listener, p providers.Provider) (err error) {
 	k8skmsv2.RegisterKeyManagementServiceServer(gs, p)
 	reflection.Register(gs)
 
-	logrus.Infof("Serving on socket: %s", gl.Addr().String())
-	logrus.Debugf("grpcRotation: value of grpcPort user input: %d", vprFlgsServe.Port)
+	slog.Info("serving on socket", "address", gl.Addr().String())
 
 START:
 	if err = gs.Serve(gl); err != nil {
-		logrus.Error(err)
+		slog.Error("gRPC serve error", "error", err)
 		goto START
 	}
 	return

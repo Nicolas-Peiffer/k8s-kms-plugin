@@ -2,20 +2,88 @@
 set -euo pipefail
 
 # ---- Check for required tools ----
-if ! command -v grpcurl >/dev/null 2>&1; then
-  echo "❌ Error: grpcurl is not installed. Please install grpcurl and retry."
+# Probe by *running* each tool, not with `command -v` — the same rule the Makefile
+# applies (see `define require`). A goenv/asdf/pyenv shim stays on PATH even when
+# the tool is not installed for the active version, so `command -v grpcurl` says
+# yes and the shim only fails once called, with
+# `goenv: 'grpcurl' command not found` — an error that surfaces far from its cause.
+#
+# Exit 127 — missing binary, or a shim with nothing behind it — is the only status
+# treated as missing; tools that reject --version exit 1 or 2 and pass.
+MISSING=()
+require_tool() {   # require_tool <binary> <how to install it>
+  local rc=0
+  "$1" --version >/dev/null 2>&1 || rc=$?
+  (( rc != 127 )) || MISSING+=("$1|$2")
+}
+
+require_tool grpcurl "go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
+require_tool jq      "sudo apt-get install jq"
+require_tool base64  "sudo apt-get install coreutils"
+require_tool curl    "sudo apt-get install curl"
+
+if (( ${#MISSING[@]} > 0 )); then
+  echo "❌ Required tools are not installed:" >&2
+  for m in "${MISSING[@]}"; do
+    IFS='|' read -r _tool _hint <<<"$m"
+    echo "   • $_tool — install it with:" >&2
+    echo "       $_hint" >&2
+  done
   exit 1
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "❌ Error: jq is not installed. Please install jq and retry."
-  exit 1
-fi
+print_jwe_header() {
+  local jwe b64
+  jwe=$(printf '%s' "$1" | base64 -d)
+  b64=$(printf '%s' "$jwe" | cut -d. -f1 | tr -- '-_' '+/')
+  case $((${#b64} % 4)) in
+    2) b64="${b64}==" ;;
+    3) b64="${b64}=" ;;
+  esac
+  echo "🔑 JWE Header:"
+  echo '```json'
+  printf '%s' "$b64" | base64 -d | jq
+  echo '```'
+}
 
-if ! command -v base64 >/dev/null 2>&1; then
-  echo "❌ Error: base64 is not installed. Please install base64 and retry."
-  exit 1
-fi
+# print_mlkem_envelope shows the size of the AEAD-wrapped seed (ciphertext) and the raw
+# ML-KEM encapsulation ciphertext (the kem-ciphertext annotation). ML-KEM has no JWE header to
+# print — the KEM ciphertext travels as a plain KMS v2 annotation instead (see
+# ml-kem-kmsv2-implementation-spec.md).
+print_mlkem_envelope() {
+  local ciphertext_b64="$1" encrypt_response="$2"
+  local ct_len kemct_b64 kemct_len
+
+  ct_len=$(printf '%s' "$ciphertext_b64" | base64 -d 2>/dev/null | wc -c | tr -d '[:space:]')
+  kemct_b64=$(printf '%s' "$encrypt_response" | jq -r '(.annotations // {})["kem-ciphertext.k8s-kms-plugin.keysealer.eclipse.org"] // empty')
+  kemct_len=0
+  [[ -n "$kemct_b64" ]] && kemct_len=$(printf '%s' "$kemct_b64" | base64 -d 2>/dev/null | wc -c | tr -d '[:space:]')
+
+  echo "🧬 ML-KEM envelope (no JWE):"
+  echo '```'
+  echo "ciphertext:                   ${ct_len} B  (nonce || AES-256-GCM-sealed DEK seed)"
+  echo "kem-ciphertext annotation: ${kemct_len} B  (raw ML-KEM encapsulation ciphertext)"
+  echo '```'
+}
+
+# print_ciphertext_info prints either the JWE protected header (AES-GCM / AES-CBC+HMAC /
+# RSA-OAEP) or the ML-KEM binary envelope's size breakdown, depending on the
+# "algorithm-family" annotation the plugin attaches to every EncryptResponse — so this
+# reports what the plugin actually produced, not an assumption baked into the script.
+print_ciphertext_info() {
+  local ciphertext_b64="$1" encrypt_response="$2"
+  local family_b64 family
+
+  family_b64=$(printf '%s' "$encrypt_response" | jq -r '(.annotations // {})["algorithm-family.k8s-kms-plugin.keysealer.eclipse.org"] // empty')
+  family=""
+  [[ -n "$family_b64" ]] && family=$(printf '%s' "$family_b64" | base64 -d 2>/dev/null || true)
+
+  if [[ "$family" == "ml-kem" ]]; then
+    print_mlkem_envelope "$ciphertext_b64" "$encrypt_response"
+  else
+    print_jwe_header "$ciphertext_b64"
+  fi
+}
 
 API_PROTO_URL="https://raw.githubusercontent.com/kubernetes/kms/refs/tags/v0.34.1/apis/v2/api.proto"
 if [[ ! -f api.proto ]]; then
@@ -49,110 +117,151 @@ if [[ -z "$PLAINTEXT_ACTIVE_KEY_ID" || -z "$SOCKET" ]]; then
   echo ""
   echo "Then it does a DecryptRequest with the ID of the OLD KEK and shows the decrypted ciphertext."
   echo ""
-  echo "Set VERBOSE=true to dump full JSON responses."
+  echo "Set VERBOSE=true to dump full JSON requests and responses."
   exit 1
 fi
 
-echo -e "\n=========================================================="
-echo "▶️ Testing ACTIVE KEK Status, Encrypt and Decrypt requests"
-# ---- Base64-encode plaintext ----
-PLAINTEXT_BASE64_ACTIVE=$(echo -n "$PLAINTEXT_ACTIVE_KEY_ID" | base64)
-echo "🔐 Input plaintext ACTIVE KEK: $PLAINTEXT_ACTIVE_KEY_ID"
-echo "🔐 Base64 encoded: $PLAINTEXT_BASE64_ACTIVE"
+echo "# 🔄 KMS v2 Key Rotation Round-Trip Test"
+echo ""
+[[ "$VERBOSE" == true ]] && echo "🔍 Verbose: enabled" || echo "🔇 Verbose: disabled — set \`VERBOSE=true\` to see full JSON requests and responses"
+
+echo ""
+echo "---"
+echo ""
+echo "## ▶️ Active KEK — Status, Encrypt & Decrypt"
 echo ""
 
-echo "1️⃣ ℹ️ Status Request & Response ACTIVE KEK"
-# ---- Get key_id from Status ---- 
+# ---- Base64-encode plaintext ----
+PLAINTEXT_BASE64_ACTIVE=$(echo -n "$PLAINTEXT_ACTIVE_KEY_ID" | base64)
+echo "🔐 Input plaintext: \`$PLAINTEXT_ACTIVE_KEY_ID\`"
+echo "🔐 Base64 encoded: \`$PLAINTEXT_BASE64_ACTIVE\`"
+
+echo ""
+echo "### 1️⃣ Status"
+echo ""
+
+# ---- Get key_id from Status ----
+STATUS_REQUEST='{}'
+[[ "$VERBOSE" == true ]] && { echo "📤 StatusRequest:"; echo '```json'; echo "$STATUS_REQUEST" | jq; echo '```'; echo ""; }
+
 STATUS_RESPONSE=$(grpcurl \
   -plaintext \
   -proto api.proto \
-  -d '{}' \
+  -d "$STATUS_REQUEST" \
   -unix \
   unix://"$SOCKET" \
   v2.KeyManagementService.Status)
 
-echo ""
-[[ "$VERBOSE" == true ]] && echo "📦 Full Status response:" && echo "$STATUS_RESPONSE" | jq
+[[ "$VERBOSE" == true ]] && { echo "📥 StatusResponse:"; echo '```json'; echo "$STATUS_RESPONSE" | jq; echo '```'; echo ""; }
 
 KEY_ID=$(echo "$STATUS_RESPONSE" | jq -r .keyId)
-echo "🧾 key_id from Status: $KEY_ID"
+echo "🧾 key_id (ACTIVE KEK): \`$KEY_ID\`"
+
+echo ""
+echo "### 2️⃣ Encrypt"
+echo ""
 
 # ---- Encrypt ----
-echo ""
-echo "2️⃣ ℹ️ Encrypt Request & Response"
+ENCRYPT_REQUEST="{\"plaintext\": \"$PLAINTEXT_BASE64_ACTIVE\", \"uid\": \"test-enc-1\"}"
+[[ "$VERBOSE" == true ]] && { echo "📤 EncryptRequest:"; echo '```json'; echo "$ENCRYPT_REQUEST" | jq; echo '```'; echo ""; }
 
 ENCRYPT_RESPONSE=$(grpcurl \
   -plaintext \
   -proto api.proto \
-  -d "{\"plaintext\": \"$PLAINTEXT_BASE64_ACTIVE\", \"uid\": \"test-enc-1\"}" \
+  -d "$ENCRYPT_REQUEST" \
   -unix \
   unix://"$SOCKET" \
   v2.KeyManagementService.Encrypt)
 
-[[ "$VERBOSE" == true ]] && echo "📦 Full Encrypt response:" && echo "$ENCRYPT_RESPONSE" | jq
+[[ "$VERBOSE" == true ]] && { echo "📥 EncryptResponse:"; echo '```json'; echo "$ENCRYPT_RESPONSE" | jq; echo '```'; echo ""; }
 
 CIPHERTEXT=$(echo "$ENCRYPT_RESPONSE" | jq -r .ciphertext)
-echo "🗄️  Ciphertext (base64): $CIPHERTEXT"
+[[ "$VERBOSE" == true ]] && { echo "🗄️ Ciphertext (base64):"; echo '```'; echo "$CIPHERTEXT"; echo '```'; echo ""; }
+print_ciphertext_info "$CIPHERTEXT" "$ENCRYPT_RESPONSE"
+echo ""
+
+echo "### 3️⃣ Decrypt"
+echo ""
 
 # ---- Decrypt ----
-echo ""
-echo "3️⃣ ℹ️ Decrypt Request & Response"
+# Annotations are forwarded from EncryptResponse, mirroring the apiserver's round-trip
+# guarantee — required for ML-KEM, whose kem-ciphertext annotation the plugin needs back to decrypt.
+DECRYPT_REQUEST=$(echo "$ENCRYPT_RESPONSE" | jq -c --arg uid "test-dec-1" --arg kid "$KEY_ID" \
+  '{ciphertext: .ciphertext, uid: $uid, key_id: $kid} + (if (.annotations // {}) == {} then {} else {annotations: .annotations} end)')
+[[ "$VERBOSE" == true ]] && { echo "📤 DecryptRequest:"; echo '```json'; echo "$DECRYPT_REQUEST" | jq; echo '```'; echo ""; }
 
 DECRYPT_RESPONSE=$(grpcurl \
   -plaintext \
   -proto api.proto \
-  -d "{\"ciphertext\": \"$CIPHERTEXT\", \"uid\": \"test-dec-1\", \"key_id\": \"$KEY_ID\"}" \
+  -d "$DECRYPT_REQUEST" \
   -unix \
   unix://"$SOCKET" \
   v2.KeyManagementService.Decrypt)
 
-[[ "$VERBOSE" == true ]] && echo "📦 Full Decrypt response:" && echo "$DECRYPT_RESPONSE" | jq
+[[ "$VERBOSE" == true ]] && { echo "📥 DecryptResponse:"; echo '```json'; echo "$DECRYPT_RESPONSE" | jq; echo '```'; echo ""; }
 
 DECRYPTED_BASE64=$(echo "$DECRYPT_RESPONSE" | jq -r .plaintext)
 DECRYPTED_TEXT=$(echo "$DECRYPTED_BASE64" | base64 -d)
+echo "🔓 Decrypted text: \`$DECRYPTED_TEXT\`"
 
-echo "🔓 Decrypted text: $DECRYPTED_TEXT"
+echo ""
+echo "### 4️⃣ Summary"
+echo ""
 
 # ---- Compare ----
-echo ""
-echo "4️⃣ ℹ️ Summary for ACTIVE KEK"
 if [[ "$DECRYPTED_TEXT" == "$PLAINTEXT_ACTIVE_KEY_ID" ]]; then
   echo "✅ Round-trip encryption/decryption successful!"
 else
-  echo "❌ Decryption mismatch! Expected '$PLAINTEXT_ACTIVE_KEY_ID' but got '$DECRYPTED_TEXT'"
+  echo "❌ Decryption mismatch! Expected \`$PLAINTEXT_ACTIVE_KEY_ID\` but got \`$DECRYPTED_TEXT\`"
   exit 1
 fi
 
-echo -e "\n=========================================================="
-echo "▶️ Testing OLD ROTATED KEK DecryptRequest"
+echo ""
+echo "---"
+echo ""
+echo "## ▶️ Old Rotated KEK — Decrypt"
+echo ""
 
-[[ "$VERBOSE" == true ]] && echo "OLD EncryptResponse JSON" && echo "$ENCRYPT_RESPONSE_OLD_KEY_ID" | base64 -d | jq
+ENCRYPT_RESPONSE_OLD_KEY_ID_JSON=$(echo "$ENCRYPT_RESPONSE_OLD_KEY_ID" | base64 -d)
+[[ "$VERBOSE" == true ]] && { echo "📦 OLD EncryptResponse JSON:"; echo '```json'; echo "$ENCRYPT_RESPONSE_OLD_KEY_ID_JSON" | jq; echo '```'; echo ""; }
 
-OLD_P11_KEY_ID=$(echo "$ENCRYPT_RESPONSE_OLD_KEY_ID" | base64 -d | jq -r .keyId)
-CIPHERTEXT_OLD_KEY_ID=$(echo "$ENCRYPT_RESPONSE_OLD_KEY_ID" | base64 -d | jq -r .ciphertext)
+OLD_P11_KEY_ID=$(echo "$ENCRYPT_RESPONSE_OLD_KEY_ID_JSON" | jq -r .keyId)
+CIPHERTEXT_OLD_KEY_ID=$(echo "$ENCRYPT_RESPONSE_OLD_KEY_ID_JSON" | jq -r .ciphertext)
+echo "🧾 key_id (OLD KEK): \`$OLD_P11_KEY_ID\`"
+echo ""
+print_ciphertext_info "$CIPHERTEXT_OLD_KEY_ID" "$ENCRYPT_RESPONSE_OLD_KEY_ID_JSON"
+echo ""
 
-# decrypt with old kek
-echo "ℹ️ Decrypt Request & Response"
+echo "### Decrypt"
+echo ""
+
+# ---- Decrypt with old KEK ----
+# Annotations are forwarded from the OLD KEK's EncryptResponse — required for ML-KEM.
+DECRYPT_REQUEST_OLD=$(echo "$ENCRYPT_RESPONSE_OLD_KEY_ID_JSON" | jq -c --arg uid "test-dec-1" --arg kid "$OLD_P11_KEY_ID" \
+  '{ciphertext: .ciphertext, uid: $uid, key_id: $kid} + (if (.annotations // {}) == {} then {} else {annotations: .annotations} end)')
+[[ "$VERBOSE" == true ]] && { echo "📤 DecryptRequest:"; echo '```json'; echo "$DECRYPT_REQUEST_OLD" | jq; echo '```'; echo ""; }
 
 DECRYPT_RESPONSE_OLD_KEY_ID=$(grpcurl \
   -plaintext \
   -proto api.proto \
-  -d "{\"ciphertext\": \"$CIPHERTEXT_OLD_KEY_ID\", \"uid\": \"test-dec-1\", \"key_id\": \"$OLD_P11_KEY_ID\"}" \
+  -d "$DECRYPT_REQUEST_OLD" \
   -unix \
   unix://"$SOCKET" \
   v2.KeyManagementService.Decrypt)
 
-[[ "$VERBOSE" == true ]] && echo "📦 Full DecryptResponse JSON:" && echo "$DECRYPT_RESPONSE_OLD_KEY_ID" | jq
+[[ "$VERBOSE" == true ]] && { echo "📥 DecryptResponse:"; echo '```json'; echo "$DECRYPT_RESPONSE_OLD_KEY_ID" | jq; echo '```'; echo ""; }
 
 DECRYPTED_BASE64_OLD_KEY_ID=$(echo "$DECRYPT_RESPONSE_OLD_KEY_ID" | jq -r .plaintext)
 DECRYPTED_TEXT_OLD_KEY_ID=$(echo "$DECRYPTED_BASE64_OLD_KEY_ID" | base64 -d)
+echo "🔓 Decrypted text: \`$DECRYPTED_TEXT_OLD_KEY_ID\`"
 
 echo ""
-echo "ℹ️ Summary for OLD KEK"
+echo "### Summary"
+echo ""
 
 if [[ "$DECRYPTED_TEXT_OLD_KEY_ID" == "$PLAINTEXT_OLD_KEY_ID" ]]; then
   echo "✅ Rotation decryption successful!"
 else
-  echo "❌ Key rotation Decryption mismatch! Expected '$PLAINTEXT_OLD_KEY_ID' but got '$DECRYPTED_TEXT_OLD_KEY_ID'"
+  echo "❌ Key rotation decryption mismatch! Expected \`$PLAINTEXT_OLD_KEY_ID\` but got \`$DECRYPTED_TEXT_OLD_KEY_ID\`"
   exit 1
 fi

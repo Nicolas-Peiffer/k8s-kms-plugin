@@ -1,25 +1,21 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
+// Package cmd implements the k8s-kms-plugin cobra CLI: the root command plus
+// the serve, serve rotation, docs, and version subcommands.
 package cmd
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"time"
 
-	filename "github.com/keepeye/logrus-filename"
-	"github.com/sirupsen/logrus"
-
-	"os"
-
+	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/logging"
 )
 
 // cobra root CLI flags. They are mostly not used because we use viper that binds the cobra flags
@@ -43,11 +39,8 @@ type ViperFlagsRoot struct {
 // Declare the viper CLI flag values buffer
 var vprFlgsRoot ViperFlagsRoot
 
-// cobra root CLI flags default value
-const (
-	defaultKekId = "a37807cd-6d1a-4d75-813a-e120f30176f7" // TODO: with KMS v2, consider not using this hardcoded value
-	defaultCaId  = "1c3d30d5-dfa8-4167-a9f9-2c768464181b" // TODO: with KMS v2, consider not using this hardcoded value
-)
+// activeLogLevel is the runtime-adjustable log level shared by all slog handlers.
+var activeLogLevel = new(slog.LevelVar)
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -58,10 +51,10 @@ using KMS v2.
 
 k8s-kms-plugin prioritizes configuration sources as follows: CLI flags > environment variables > configuration files > default settings.
 
-Project Page: https://github.com/ThalesGroup/k8s-kms-plugin
+Project Page: https://github.com/eclipse-keysealer/k8s-kms-plugin
 `,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		logrus.Warn("No subcommand provided. Please use one of the available subcommands. Showing help message.")
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		slog.Warn("No subcommand provided. Please use one of the available subcommands. Showing help message.")
 		return cmd.Help()
 	},
 }
@@ -69,10 +62,6 @@ Project Page: https://github.com/ThalesGroup/k8s-kms-plugin
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	filenameHook := filename.NewHook()
-	filenameHook.Field = "line"
-	logrus.AddHook(filenameHook)
-
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -89,14 +78,8 @@ func init() {
 		Title: "Main KMS Commands:",
 	}
 
-	kmsCmdsGrpSupporting := &cobra.Group{
-		ID:    "kmscmdsgrpsupporting", // ID needs to be lowercase
-		Title: "Supporting KMS Commands:",
-	}
-
 	// Add groups to the root command
 	rootCmd.AddGroup(kmsCmdsGrpMain)
-	rootCmd.AddGroup(kmsCmdsGrpSupporting)
 
 	// Since this project uses Viper bind with Cobra flags, we generally do not need to use "Flags().*Var"
 	// (like StringVar, BoolVar, Uint16Var, etc...) as we do not need to access the cobra flag values directly. This is
@@ -108,60 +91,72 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "k8s-kms-plugin.config.yaml", "ConfigFile. Env var: K8S_KMS_PLUGIN_CONFIG_FILE")
 
 	// logging level
-	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Set logrus.SetLevel to \"debug\". This is equivalent to using --log-level=debug. Flags --log-level and --debug flag are mutually exclusive. Env var: K8S_KMS_PLUGIN_DEBUG.")
-	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Set logrus.SetLevel. Possible values: trace, debug, info, warning, error, fatal and panic. Flags --log-level and --debug flag are mutually exclusive. Env var: K8S_KMS_PLUGIN_LOG_LEVEL.")
-	rootCmd.RegisterFlagCompletionFunc("log-level", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"trace", "debug", "info", "warning", "error", "fatal", "panic"}, cobra.ShellCompDirectiveNoFileComp
-	})
-	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "Logrus log output format. Possible values: text, json. Env var: K8S_KMS_PLUGIN_LOG_FORMAT")
-	rootCmd.RegisterFlagCompletionFunc("log-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Set log level to \"debug\". This is equivalent to using --log-level=debug. Flags --log-level and --debug flag are mutually exclusive. Env var: K8S_KMS_PLUGIN_DEBUG.")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Set log level. Possible values: trace, debug, info, warn, error, quiet. Flags --log-level and --debug flag are mutually exclusive. Env var: K8S_KMS_PLUGIN_LOG_LEVEL.")
+	if err := rootCmd.RegisterFlagCompletionFunc("log-level", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"trace", "debug", "info", "warn", "error", "quiet"}, cobra.ShellCompDirectiveNoFileComp
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "log-level", "error", err)
+	}
+	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "Log output format. Possible values: text, json. Env var: K8S_KMS_PLUGIN_LOG_FORMAT")
+	if err := rootCmd.RegisterFlagCompletionFunc("log-format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"text", "json"}, cobra.ShellCompDirectiveNoFileComp
-	})
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "log-format", "error", err)
+	}
 	rootCmd.MarkFlagsMutuallyExclusive("log-level", "debug") // --log-level and --debug flag are mutually exclusive since debug is an alias for log-level=debug
 }
 
 // initConfig reads in config file and ENV variables if set and populate CLI flags buffer thanks to viper
 func initConfig() {
 	// Parse config file with viper
-	ReadViperConfigE(viper.GetViper(), rootCmd)
+	if err := ReadViperConfigE(viper.GetViper(), rootCmd); err != nil {
+		slog.Error("error reading viper config", "error", err)
+	}
 
 	// Initialize and populate cobra CLI root flags values with viper
-	InitViperSubCmdE(viper.GetViper(), rootCmd, &vprFlgsRoot)
+	if err := InitViperSubCmdE(viper.GetViper(), rootCmd, &vprFlgsRoot); err != nil {
+		slog.Error("error initializing viper", "cobra_cmd", rootCmd.Use, "error", err)
+	}
 
-	// Set logs format
+	// Determine log level
+	if rootCmd.Flags().Lookup("debug").Changed {
+		activeLogLevel.Set(slog.LevelDebug)
+	} else {
+		level, err := logging.ParseLevel(vprFlgsRoot.LogLevel)
+		if err != nil {
+			slog.Error("unknown log level", "error", err)
+		}
+		activeLogLevel.Set(level)
+		if level == logging.LevelQuiet {
+			slog.SetDefault(slog.New(slog.DiscardHandler))
+			return
+		}
+	}
+
+	// Build slog handler based on requested format
+	opts := &tint.Options{
+		Level:       activeLogLevel,
+		TimeFormat:  time.DateTime,
+		AddSource:   true,
+		ReplaceAttr: logging.ReplaceAttr,
+	}
+	var handler slog.Handler
 	switch vprFlgsRoot.LogFormat {
 	case "json":
-		logrus.SetFormatter(&logrus.JSONFormatter{
-			PrettyPrint:      false,
-			DisableTimestamp: false,
-			TimestampFormat:  time.RFC3339,
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level:       activeLogLevel,
+			AddSource:   true,
+			ReplaceAttr: logging.ReplaceAttr,
 		})
 	case "text":
-		logrus.SetFormatter(&logrus.TextFormatter{
-			ForceColors:      true,
-			DisableTimestamp: false,
-			TimestampFormat:  time.DateTime,
-		})
+		handler = tint.NewTextHandler(os.Stderr, opts)
 	default:
-		logrus.WithError(fmt.Errorf("logrus unknown output format")).Error("unknown log format")
+		handler = tint.NewTextHandler(os.Stderr, opts)
+		slog.Error("unknown log format", "format", vprFlgsRoot.LogFormat)
 	}
-	logrus.Debugf("logrus output format is set to: %s", vprFlgsRoot.LogFormat)
+	slog.SetDefault(slog.New(handler))
 
-	// Initialize logrus log level and log format for all cobra commands and subcommands.
-	debugFlagIsUsed := rootCmd.Flags().Lookup("debug").Changed
-
-	switch {
-	case debugFlagIsUsed:
-		// harcode that the --debug flags set logrus level to debug
-		logrus.SetLevel(logrus.DebugLevel)
-	default:
-		// get the log level from viper which is bind to the cobra flag --log-level
-		level, err := logrus.ParseLevel(vprFlgsRoot.LogLevel)
-		if err != nil {
-			logrus.WithError(err).Error("unknown log level")
-		}
-		logrus.SetLevel(level)
-	}
-	logrus.Debugf("logrus log-level is set to: %s", logrus.GetLevel())
-
+	slog.Debug("log format configured", "log_format", vprFlgsRoot.LogFormat)
+	slog.Debug("log level configured", "log_level", vprFlgsRoot.LogLevel)
 }
