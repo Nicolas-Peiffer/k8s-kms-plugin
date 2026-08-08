@@ -1,200 +1,344 @@
 ## Test `k8s-kms-plugin serve` with `grpcurl`
 
-The `grpcurl-roundtrip-test.sh` script allows you to mimic and test the
-communication between the `k8s-kms-plugin` and the `kubernetes` KMS API server.
+The scripts in this directory let you manually exercise the KMS v2 gRPC API
+(`Status`, `Encrypt`, `Decrypt`) against a running `k8s-kms-plugin` instance,
+without needing a Kubernetes cluster.
 
-The script tests a [`StatusRequest`](https://pkg.go.dev/k8s.io/kms/apis/v2#StatusRequest), then an [`EncryptRequest`](https://pkg.go.dev/k8s.io/kms/apis/v2#EncryptRequest) and finally a [`DecryptRequest`](https://pkg.go.dev/k8s.io/kms/apis/v2#DecryptRequest).
+**Prerequisites**: `grpcurl`, `jq`, `base64` must be in your `PATH`.
 
-This assume a `k8s-kms-plugin serve` is running without errors and listening
-on this unix socket `/run/user/1000/k8s-kms-plugin.sock`.
+```bash
+go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+```
+
+> [`grpcurl`](https://github.com/fullstorydev/grpcurl) is also required by the **end-to-end test suite**
+> ([`test/e2e/`](../../test/e2e/)), which drives the same RPCs from Go — see
+> [Running the Tests](../../docs/development.md#running-the-tests).
+
+**`api.proto`**: these scripts resolve the KMS v2 service definition themselves, at the `k8s.io/kms`
+version `go.mod` selects — from the Go module cache when it is populated, otherwise downloaded to a
+temp file. Nothing is written into this directory. See [`lib-api-proto.sh`](./lib-api-proto.sh).
+
+Set `KMS_PROTO_VERSION` to pin a different release (for example `KMS_PROTO_VERSION=v0.34.1`) when
+testing against a version the repository does not build against yet.
+
+---
+
+### `grpcurl-roundtrip-test.sh`
+
+Performs a full **Status → Encrypt → Decrypt** round-trip and verifies the
+decrypted output matches the original plaintext.
+
+```bash
+./grpcurl-roundtrip-test.sh <plaintext> <unix-socket-path>
+VERBOSE=true ./grpcurl-roundtrip-test.sh <plaintext> <unix-socket-path>
+```
+
+Set `VERBOSE=true` to print full JSON requests and responses for each RPC call.
+
+#### Default output
 
 ```bash
 ./grpcurl-roundtrip-test.sh "Hello world" /run/user/1000/k8s-kms-plugin.sock
 ```
+
+```markdown
+# 🔐 KMS v2 Round-Trip Test
+
+🔇 Verbose: disabled — set `VERBOSE=true` to see full JSON requests and responses
+
+🔐 Input plaintext: `Hello world`
+🔐 Base64 encoded: `SGVsbG8gd29ybGQ=`
+
+---
+
+## 1️⃣ Status
+
+🧾 key_id: `05`
+
+---
+
+## 2️⃣ Encrypt
+
+🔑 JWE Header:
+```json
+{
+  "alg": "dir",
+  "kid": "05",
+  "enc": "A256GCM"
+}
 ```
-Using existing api.proto. If you want to update it, please remove this file.
-🔐 Input plaintext: Hello world
-🔐 Base64 encoded: SGVsbG8gd29ybGQ=
 
-1️⃣ ℹ️ Status Request & Response
+---
 
-🧾 key_id from Status: 64636138353931326363356537313264
+## 3️⃣ Decrypt
 
-2️⃣ ℹ️ Encrypt Request & Response
+🔓 Decrypted text: `Hello world`
 
-🗄️  Ciphertext JWE only (base64): ZXlKaGJHY2lPaUpCTWpVMlEwSkRJaXdpYTJsa0lqb2lOalEyTXpZeE16Z3pOVE01TXpFek1qWXpOak16TlRZMU16Y3pNVE15TmpRaUxDSjBlWEFpT2lKS1YxUWlMQ0pqZEhraU9pSktWMVFpTENKZmRHaGhiR1Z6WDJGaFpDSTZJa0ZCUVVGQlFVRkJRVUZ6SWl3aVpXNWpJam9pUVRJMU5rTkNReUo5Li50eXhEb1RpdWd5cTdTTWY3RjBYVFpRLkt3Ny1POHNkWWdYbHo4ZFhuM3FvTWcuRnlOU1ZtMll1SGtSODBsRGlENUdDRXQ2cEZaSjVSeFhOczNwYmJUeXpPNA==
+---
 
-⬇️ Full EncryptResponse JSON base64 encoded: use this as <base64 EncryptResponse old kek> in the grpcurl-roundtrip-key-rotation.sh script:
-eyJjaXBoZXJ0ZXh0IjoiWlhsS2FHSkhZMmxQYVVwQ1RXcFZNbEV3U2tSSmFYZHBZVEpzYTBscWIybE9hbEV5VFhwWmVFMTZaM3BPVkUwMVRYcEZlazFxV1hwT2FrMTZUbFJaTVUxNlkzcE5WRTE1VG1wUmFVeERTakJsV0VGcFQybEtTMVl4VVdsTVEwcHFaRWhyYVU5cFNrdFdNVkZwVEVOS1ptUkhhR2hpUjFaNldESkdhRnBEU1RaSmEwWkNVVlZHUWxGVlJrSlJWVVo2U1dsM2FWcFhOV3BKYW05cFVWUkpNVTVyVGtOUmVVbzVMaTUwZVhoRWIxUnBkV2Q1Y1RkVFRXWTNSakJZVkZwUkxrdDNOeTFQT0hOa1dXZFliSG80WkZodU0zRnZUV2N1Um5sT1UxWnRNbGwxU0d0U09EQnNSR2xFTlVkRFJYUTJjRVphU2pWU2VGaE9jek53WW1KVWVYcFBOQT09Iiwia2V5SWQiOiI2NDYzNjEzODM1MzkzMTMyNjM2MzM1NjUzNzMxMzI2NCJ9Cg==
+## 4️⃣ Summary
 
-3️⃣ ℹ️ Decrypt Request & Response
-
-🔓 Decrypted text: Hello world
-
-4️⃣ ℹ️ Summary
 ✅ Round-trip encryption/decryption successful!
 ```
 
-If the script is successful, it means that the `k8s-kms-plugin` and encrypt and
-decrypt operations are working correctly.
+`grpcurl-roundtrip-test.sh` prints a JWE header for the classical algorithm
+families (`aes-gcm`, `aes-cbc`, `rsa-oaep`) as shown above. For `ml-kem`, the
+plugin's `EncryptResponse` carries no JWE at all — the script detects this
+from the `algorithm-family` annotation the plugin attaches to every
+`EncryptResponse`, and prints the binary envelope's size breakdown instead:
 
-You can also add the env var `VERBOSE=true` to see the JSON content of the KMS v2 Status, Encrypt and Decrypt responses.
+```markdown
+## 2️⃣ Encrypt
 
-```bash
-VERBOSE=true ./grpcurl-roundtrip-test.sh 'hello world' /run/user/1000/k8s-kms-plugin.sock
+🧬 ML-KEM envelope (no JWE):
+```
+ciphertext:                  60 B  (nonce || AES-256-GCM-sealed DEK seed)
+kem-ciphertext annotation: 1088 B  (raw ML-KEM encapsulation ciphertext)
+```
 ```
 
-```json
-Using existing api.proto. If you want to update it, please remove this file.
-🔐 Input plaintext: hello world
-🔐 Base64 encoded: aGVsbG8gd29ybGQ=
+ML-KEM is a Key Encapsulation Mechanism, not a public-key encryption scheme: it
+always produces two artifacts (the KEM ciphertext and the AEAD-wrapped seed)
+where JWE has only one slot, and the KEM ciphertext alone exceeds the KMS v2
+1 kB `ciphertext` limit for ML-KEM-768/1024. So the plugin splits them across
+the two fields KMS v2 already provides: the AEAD-wrapped seed stays in
+`ciphertext`, and the KEM ciphertext travels in
+`annotations["kem-ciphertext.k8s-kms-plugin.keysealer.eclipse.org"]`, which the
+apiserver round-trips verbatim to the matching `Decrypt` call.
 
-1️⃣ ℹ️ Status Request & Response
-📦 Full StatusResponse JSON:
+#### Verbose output
+
+```bash
+VERBOSE=true ./grpcurl-roundtrip-test.sh "Hello world" /run/user/1000/k8s-kms-plugin.sock
+```
+
+```markdown
+# 🔐 KMS v2 Round-Trip Test
+
+🔍 Verbose: enabled
+
+🔐 Input plaintext: `Hello world`
+🔐 Base64 encoded: `SGVsbG8gd29ybGQ=`
+
+---
+
+## 1️⃣ Status
+
+📤 StatusRequest:
+```json
+{}
+```
+
+📥 StatusResponse:
+```json
 {
   "version": "v2",
   "healthz": "ok",
-  "keyId": "64636138353931326363356537313264"
+  "keyId": "05"
 }
+```
 
-🧾 key_id from Status: 64636138353931326363356537313264
+🧾 key_id: `05`
 
-2️⃣ ℹ️ Encrypt Request & Response
-📦 Full EncryptResponse JSON:
+---
+
+## 2️⃣ Encrypt
+
+📤 EncryptRequest:
+```json
 {
-  "ciphertext": "ZXlKaGJHY2lPaUpCTWpVMlEwSkRJaXdpYTJsa0lqb2lOalEyTXpZeE16Z3pOVE01TXpFek1qWXpOak16TlRZMU16Y3pNVE15TmpRaUxDSjBlWEFpT2lKS1YxUWlMQ0pqZEhraU9pSktWMVFpTENKZmRHaGhiR1Z6WDJGaFpDSTZJa0ZCUVVGQlFVRkJRVUZ6SWl3aVpXNWpJam9pUVRJMU5rTkNReUo5Li5UZ05Yamt3ZTBnU0tVb0xaV3hvNExRLlozZmgyV3R5UG5GWlAtQnV0TEhEaUEuRnlOU1ZtMll1SGtSODBsRGlENUdDRXQ2cEZaSjVSeFhOczNwYmJUeXpPNA==",
-  "keyId": "64636138353931326363356537313264"
+  "plaintext": "SGVsbG8gd29ybGQ=",
+  "uid": "test-enc-1"
 }
+```
 
-🗄️  Ciphertext JWE only (base64): ZXlKaGJHY2lPaUpCTWpVMlEwSkRJaXdpYTJsa0lqb2lOalEyTXpZeE16Z3pOVE01TXpFek1qWXpOak16TlRZMU16Y3pNVE15TmpRaUxDSjBlWEFpT2lKS1YxUWlMQ0pqZEhraU9pSktWMVFpTENKZmRHaGhiR1Z6WDJGaFpDSTZJa0ZCUVVGQlFVRkJRVUZ6SWl3aVpXNWpJam9pUVRJMU5rTkNReUo5Li5UZ05Yamt3ZTBnU0tVb0xaV3hvNExRLlozZmgyV3R5UG5GWlAtQnV0TEhEaUEuRnlOU1ZtMll1SGtSODBsRGlENUdDRXQ2cEZaSjVSeFhOczNwYmJUeXpPNA==
-
-⬇️ Full EncryptResponse JSON base64 encoded: use this as <base64 EncryptResponse old kek> in the grpcurl-roundtrip-key-rotation.sh script:
-eyJjaXBoZXJ0ZXh0IjoiWlhsS2FHSkhZMmxQYVVwQ1RXcFZNbEV3U2tSSmFYZHBZVEpzYTBscWIybE9hbEV5VFhwWmVFMTZaM3BPVkUwMVRYcEZlazFxV1hwT2FrMTZUbFJaTVUxNlkzcE5WRTE1VG1wUmFVeERTakJsV0VGcFQybEtTMVl4VVdsTVEwcHFaRWhyYVU5cFNrdFdNVkZwVEVOS1ptUkhhR2hpUjFaNldESkdhRnBEU1RaSmEwWkNVVlZHUWxGVlJrSlJWVVo2U1dsM2FWcFhOV3BKYW05cFVWUkpNVTVyVGtOUmVVbzVMaTVVWjA1WWFtdDNaVEJuVTB0VmIweGFWM2h2TkV4Ukxsb3pabWd5VjNSNVVHNUdXbEF0UW5WMFRFaEVhVUV1Um5sT1UxWnRNbGwxU0d0U09EQnNSR2xFTlVkRFJYUTJjRVphU2pWU2VGaE9jek53WW1KVWVYcFBOQT09Iiwia2V5SWQiOiI2NDYzNjEzODM1MzkzMTMyNjM2MzM1NjUzNzMxMzI2NCJ9Cg==
-
-3️⃣ ℹ️ Decrypt Request & Response
-📦 Full DecryptResponse JSON:
+📥 EncryptResponse:
+```json
 {
-  "plaintext": "aGVsbG8gd29ybGQ="
+  "ciphertext": "ZXlKaGJHY2l...",
+  "keyId": "05"
 }
+```
 
-🔓 Decrypted text: hello world
+🗄️ Ciphertext (base64):
+```
+ZXlKaGJHY2lPaUpOVEMx...
+```
 
-4️⃣ ℹ️ Summary
+🔑 JWE Header:
+```json
+{
+  "alg": "dir",
+  "kid": "05",
+  "enc": "A256GCM"
+}
+```
+
+(For `ml-kem`, this section instead prints a `🧬 ML-KEM envelope (no JWE):`
+block — see the note under "Default output" above.)
+
+> ⬇️ Run key rotation test with the old KEK data from this run:
+```bash
+VERBOSE=true ./grpcurl-roundtrip-key-rotation.sh \
+  '<plaintext for ACTIVE KEK>' \
+  'Hello world' \
+  'eyJjaXBoZXJ0ZXh0Ij...' \
+  '/run/user/1000/k8s-kms-plugin.sock'
+```
+
+---
+
+## 3️⃣ Decrypt
+
+📤 DecryptRequest:
+```json
+{
+  "ciphertext": "ZXlKaGJHY2l...",
+  "uid": "test-dec-1",
+  "key_id": "05"
+}
+```
+
+📥 DecryptResponse:
+```json
+{
+  "plaintext": "SGVsbG8gd29ybGQ="
+}
+```
+
+🔓 Decrypted text: `Hello world`
+
+---
+
+## 4️⃣ Summary
+
 ✅ Round-trip encryption/decryption successful!
 ```
 
-## Test `k8s-kms-plugin serve rotation` with `grpcurl`
+---
 
-Principle is the same, expect the purpose here is also to verify if the decryption of content encrypted with the old KEK works.
+### `grpcurl-roundtrip-key-rotation.sh`
 
-### First run `k8s-kms-plugin serve` with `grpcurl-roundtrip-test.sh` and get the content of an `EncryptResponse`
-
-In this situation, key ID `64636138353931326363356537313264` will be later rotated and replaced by a new key.
+Verifies that after a key rotation, the plugin using the **new (ACTIVE) KEK**
+can still decrypt data that was encrypted with the **old KEK**.
 
 ```bash
-./k8s-kms-plugin \
-  serve \
-    --log-level=trace \
-    --p11-lib  /usr/lib/x86_64-linux-gnu/libtpm2_pkcs11.so.1  \
-    --p11-label mylabel  \
-    --p11-pin  mypin  \
-    --kek-id  64636138353931326363356537313264 \
-    --hmac-id 30663536623936326235663530363234 \
-    --algorithm aes-cbc \
-    --socket /run/user/1000/k8s-kms-plugin.sock
+VERBOSE=true ./grpcurl-roundtrip-key-rotation.sh \
+  '<plaintext for ACTIVE KEK>' \
+  '<plaintext for OLD KEK>' \
+  '<base64 EncryptResponse old kek>' \
+  '<unix-socket-path>'
 ```
 
-Then run `./grpcurl-roundtrip-test.sh "Hello world" /run/user/1000/k8s-kms-plugin.sock`.
+The `<base64 EncryptResponse old kek>` value is printed by
+`grpcurl-roundtrip-test.sh` when run with `VERBOSE=true` (see the
+`> ⬇️ Run key rotation test` block in the verbose output above).
 
-Retrieve this field:
+#### Workflow
+
+**Step 1** — Start `k8s-kms-plugin serve` with the **old** KEK and run the
+roundtrip test in verbose mode to capture the `EncryptResponse`:
+
+```bash
+k8s-kms-plugin serve \
+  --log-level=trace \
+  --socket /run/user/1000/k8s-kms-plugin.sock \
+  --p11-lib /usr/lib/x86_64-linux-gnu/libtpm2_pkcs11.so.1 \
+  --p11-label mylabel \
+  --p11-pin mypin \
+  --p11-key-id 64636138353931326363356537313264 \
+  --p11-hmac-id 30663536623936326235663530363234 \
+  --algorithm-family aes-cbc
 ```
-⬇️ Full EncryptResponse JSON base64 encoded: use this as <base64 EncryptResponse old kek> in the grpcurl-roundtrip-key-rotation.sh script:
-eyJjaXBoZXJ0ZXh0IjoiWlhsS2FHSkhZMmxQYVVwQ1RXcFZNbEV3U2tSSmFYZHBZVEpzYTBscWIybE9hbEV5VFhwWmVFMTZaM3BPVkUwMVRYcEZlazFxV1hwT2FrMTZUbFJaTVUxNlkzcE5WRTE1VG1wUmFVeERTakJsV0VGcFQybEtTMVl4VVdsTVEwcHFaRWhyYVU5cFNrdFdNVkZwVEVOS1ptUkhhR2hpUjFaNldESkdhRnBEU1RaSmEwWkNVVlZHUWxGVlJrSlJWVVo2U1dsM2FWcFhOV3BKYW05cFVWUkpNVTVyVGtOUmVVbzVMaTVwVVZVemFsTk5hV2hLUTNkT1YyWXpPVk4xYUdwQkxtMUVjM0JyUVdSNVQweEpTa2hLWmtsR1FqVTBWV2N1Um5sT1UxWnRNbGwxU0d0U09EQnNSR2xFTlVkRFJYUTJjRVphU2pWU2VGaE9jek53WW1KVWVYcFBOQT09Iiwia2V5SWQiOiI2NDYzNjEzODM1MzkzMTMyNjM2MzM1NjUzNzMxMzI2NCJ9Cg==
+
+```bash
+VERBOSE=true ./grpcurl-roundtrip-test.sh "Hello world" /run/user/1000/k8s-kms-plugin.sock
 ```
 
-You will use it in the `grpcurl-roundtrip-key-rotation.sh` script.
+Copy the ready-to-run command from the `> ⬇️ Run key rotation test` block
+in the output.
 
-### Now run `k8s-kms-plugin serve rotation`
+**Step 2** — Stop the plugin, then restart with `serve rotation` using the
+**new (ACTIVE)** KEK and the **old** KEK for decryption fallback:
 
-Key with ID `64636138353931326363356537313264` is rotated by a new key with label `rsa0` and ID `123abc`.
-
-```
-k8s-kms-plugin \
-  serve \
+```bash
+k8s-kms-plugin serve \
   --log-level=trace \
   --socket /run/user/1000/k8s-kms-plugin.sock \
   --p11-lib /usr/lib/x86_64-linux-gnu/libtpm2_pkcs11.so.1 \
   --p11-label mylabel \
   --p11-pin mypin \
   --p11-key-label rsa0 \
-  --algorithm rsa-oaep \
-  --config grpc-network.yaml \
+  --algorithm-family rsa-oaep \
   rotation \
     --old-p11-lib /usr/lib/x86_64-linux-gnu/libtpm2_pkcs11.so.1 \
     --old-p11-label mylabel \
     --old-p11-pin mypin \
-    --old-kek-id 64636138353931326363356537313264 \
-    --old-hmac-id 30663536623936326235663530363234 \
-    --old-algorithm aes-cbc
+    --old-p11-key-id 64636138353931326363356537313264 \
+    --old-p11-hmac-id 30663536623936326235663530363234 \
+    --old-algorithm-family aes-cbc
 ```
 
-Then run
+**Step 3** — Paste and run the command copied from step 1:
 
 ```bash
-VERBOSE=true ./grpcurl-roundtrip-key-rotation.sh 'hello world active KEK' 'Hello world' 'eyJjaXBoZXJ0ZXh0IjoiWlhsS2FHSkhZMmxQYVVwQ1RXcFZNbEV3U2tSSmFYZHBZVEpzYTBscWIybE9hbEV5VFhwWmVFMTZaM3BPVkUwMVRYcEZlazFxV1hwT2FrMTZUbFJaTVUxNlkzcE5WRTE1VG1wUmFVeERTakJsV0VGcFQybEtTMVl4VVdsTVEwcHFaRWhyYVU5cFNrdFdNVkZwVEVOS1ptUkhhR2hpUjFaNldESkdhRnBEU1RaSmEwWkNVVlZHUWxGVlJrSlJWVVo2U1dsM2FWcFhOV3BKYW05cFVWUkpNVTVyVGtOUmVVbzVMaTVwVVZVemFsTk5hV2hLUTNkT1YyWXpPVk4xYUdwQkxtMUVjM0JyUVdSNVQweEpTa2hLWmtsR1FqVTBWV2N1Um5sT1UxWnRNbGwxU0d0U09EQnNSR2xFTlVkRFJYUTJjRVphU2pWU2VGaE9jek53WW1KVWVYcFBOQT09Iiwia2V5SWQiOiI2NDYzNjEzODM1MzkzMTMyNjM2MzM1NjUzNzMxMzI2NCJ9Cg==' /run/user/1000/k8s-kms-plugin.sock
+VERBOSE=true ./grpcurl-roundtrip-key-rotation.sh \
+  'hello world active KEK' \
+  'Hello world' \
+  'eyJjaXBoZXJ0ZXh0Ij...' \
+  '/run/user/1000/k8s-kms-plugin.sock'
 ```
 
-You should get
+A successful run prints `✅ Round-trip encryption/decryption successful!` for
+the ACTIVE KEK section, and `✅ Rotation decryption successful!` for the OLD
+KEK section, confirming that the rotation server can decrypt data encrypted
+under the previous key.
 
-```json
-Using existing api.proto. If you want to update it, please remove this file.
+# Collect envelope size samples
 
-==========================================================
-▶️ Testing ACTIVE KEK Status, Encrypt and Decrypt requests
-🔐 Input plaintext ACTIVE KEK: hello world active KEK
-🔐 Base64 encoded: aGVsbG8gd29ybGQgYWN0aXZlIEtFSw==
+The script [`collect-jwe-samples.sh`](./collect-jwe-samples.sh) drives every
+supported algorithm family through a Status → Encrypt → Decrypt round-trip and
+reports the size of `EncryptResponse.ciphertext`, which KMS v2 caps at < 1 kB.
+For `aes-gcm` / `aes-cbc` / `rsa-oaep` this is a JWE Compact Serialization; for
+`ml-kem` it is a plain binary envelope (`nonce || AES-256-GCM-sealed seed`,
+~60 B) with the raw ML-KEM encapsulation ciphertext carried separately in a
+`kem-ciphertext` annotation — the split that keeps ML-KEM under the 1 kB limit in the
+first place. See [ML-KEM](../../docs/softhsm-v3.md#ml-kem) for how
+to provision an ML-KEM key to exercise that case.
 
-1️⃣ ℹ️ Status Request & Response ACTIVE KEK
+Unlike the round-trip scripts above, this one starts and stops the plugin
+itself — one plugin per case, since the plugin serves exactly one KEK and one
+algorithm family per socket. It only needs a `create-dev-token` SoftHSM store:
 
-📦 Full Status response:
-{
-  "version": "v2",
-  "healthz": "ok",
-  "keyId": "123abc"
-}
-🧾 key_id from Status: 123abc
-
-2️⃣ ℹ️ Encrypt Request & Response
-📦 Full Encrypt response:
-{
-  "ciphertext": "ZXlKaGJHY2lPaUpTVTBFdFQwRkZVQ0lzSW10cFpDSTZJalE1T1dZMFltWmhZbVppT1dFME5qazNNbVl4TUdNeFl6RmxNamcwTmpjNFpEbG1ZbUk1WWpZeVpHWmhObUk1TURVNFpEUmpPV0kwWm1RME1qSmxNV1FpTENKMGVYQWlPaUpLVjFRaUxDSmpkSGtpT2lKS1YxUWlMQ0psYm1NaU9pSkJNalUyUjBOTkluMC5MVkE0NmlJYW9OaXpjOWRXTjJoNXBoVjEyOF9Kc2tpRFhpMWROTjFKaWx4cGoyQjdjVmdLanZhMW1XdXQ5S1kxc3VMYmZLS2I5TVBPSWFwdVNJTk1YMEF5c2VwZzAyM2VGS19aSDByT2lQbm1kVENKd2RyUHlwTkZkcXpWc0FUSUJYTHRxamRycVdQN21KN0NvdXBHR19ScEN1NjB5N1dqVmVKa2RmbmI1eUxRbWZBTnp2XzlnQXJZOEFpYUo4NDI4SnEzQk1CeFE2blBOTW9FMUdLNUNoODlNSWVGbEJWQWdEQjg0T19OcGs3NlpadHYzclFDUUY0cFZLQmV2Y1FDRmVFVldEbFpZbVpIZ2tpMlNOY3hSZF9MUWtRd0xPTEVycTJXeXdybDU5aUVkYnNuM0pOU2I5aTdTY2dLVEFETUR3WXhwOWMwR05HeEY1THp0VEdmbWcuVzdOTVRzOFFZMjJ2WENxci5zNjdmRGUtT0RBNmxlblBfQThnWEFEeEJRcm90VEEuVlRfZkJpbTRYV1FLLU85di13TEl2Zw==",
-  "keyId": "123abc"
-}
-🗄️  Ciphertext (base64): ZXlKaGJHY2lPaUpTVTBFdFQwRkZVQ0lzSW10cFpDSTZJalE1T1dZMFltWmhZbVppT1dFME5qazNNbVl4TUdNeFl6RmxNamcwTmpjNFpEbG1ZbUk1WWpZeVpHWmhObUk1TURVNFpEUmpPV0kwWm1RME1qSmxNV1FpTENKMGVYQWlPaUpLVjFRaUxDSmpkSGtpT2lKS1YxUWlMQ0psYm1NaU9pSkJNalUyUjBOTkluMC5MVkE0NmlJYW9OaXpjOWRXTjJoNXBoVjEyOF9Kc2tpRFhpMWROTjFKaWx4cGoyQjdjVmdLanZhMW1XdXQ5S1kxc3VMYmZLS2I5TVBPSWFwdVNJTk1YMEF5c2VwZzAyM2VGS19aSDByT2lQbm1kVENKd2RyUHlwTkZkcXpWc0FUSUJYTHRxamRycVdQN21KN0NvdXBHR19ScEN1NjB5N1dqVmVKa2RmbmI1eUxRbWZBTnp2XzlnQXJZOEFpYUo4NDI4SnEzQk1CeFE2blBOTW9FMUdLNUNoODlNSWVGbEJWQWdEQjg0T19OcGs3NlpadHYzclFDUUY0cFZLQmV2Y1FDRmVFVldEbFpZbVpIZ2tpMlNOY3hSZF9MUWtRd0xPTEVycTJXeXdybDU5aUVkYnNuM0pOU2I5aTdTY2dLVEFETUR3WXhwOWMwR05HeEY1THp0VEdmbWcuVzdOTVRzOFFZMjJ2WENxci5zNjdmRGUtT0RBNmxlblBfQThnWEFEeEJRcm90VEEuVlRfZkJpbTRYV1FLLU85di13TEl2Zw==
-
-3️⃣ ℹ️ Decrypt Request & Response
-📦 Full Decrypt response:
-{
-  "plaintext": "aGVsbG8gd29ybGQgYWN0aXZlIEtFSw=="
-}
-🔓 Decrypted text: hello world active KEK
-
-4️⃣ ℹ️ Summary for ACTIVE KEK
-✅ Round-trip encryption/decryption successful!
-
-==========================================================
-▶️ Testing OLD ROTATED KEK DecryptRequest
-OLD EncryptResponse JSON
-{
-  "ciphertext": "ZXlKaGJHY2lPaUpCTWpVMlEwSkRJaXdpYTJsa0lqb2lOalEyTXpZeE16Z3pOVE01TXpFek1qWXpOak16TlRZMU16Y3pNVE15TmpRaUxDSjBlWEFpT2lKS1YxUWlMQ0pqZEhraU9pSktWMVFpTENKZmRHaGhiR1Z6WDJGaFpDSTZJa0ZCUVVGQlFVRkJRVUZ6SWl3aVpXNWpJam9pUVRJMU5rTkNReUo5Li5pUVUzalNNaWhKQ3dOV2YzOVN1aGpBLm1Ec3BrQWR5T0xJSkhKZklGQjU0VWcuRnlOU1ZtMll1SGtSODBsRGlENUdDRXQ2cEZaSjVSeFhOczNwYmJUeXpPNA==",
-  "keyId": "64636138353931326363356537313264"
-}
-ℹ️ Decrypt Request & Response
-📦 Full DecryptResponse JSON:
-{
-  "plaintext": "SGVsbG8gd29ybGQ="
-}
-
-ℹ️ Summary for OLD KEK
-✅ Rotation decryption successful!
+```bash
+export SOFTHSM2_CONF=/tmp/k8s-kms-plugin-devtoken/softhsm2.conf
+./collect-jwe-samples.sh --lib /path/to/libsofthsmv3.so
 ```
+
+Results land in `jwe-samples/` — a git-ignored directory — plus a
+`jwe-samples.zip` bundling the whole tree, ready to drop onto a GitHub issue:
+
+```
+jwe-samples/summary.md                    table of sizes
+jwe-samples/summary.csv                   same data, machine-readable
+jwe-samples/summary.json                  same, plus the per-segment breakdown
+jwe-samples/messages.md                   every EncryptResponse / DecryptRequest
+jwe-samples/<case>/*.json                 full per-case messages
+jwe-samples/<case>/jwe.compact.txt        aes-gcm / aes-cbc / rsa-oaep
+jwe-samples/<case>/envelope.bin           ml-kem
+jwe-samples/<case>/plugin.log             that case's plugin output
+```
+
+Useful flags — `--help` lists them all:
+
+| Flag | Effect |
+|---|---|
+| `--only REGEX` | run just the matching cases, e.g. `--only 'ml-kem'` |
+| `--keep-going` | carry on after a failing case instead of stopping |
+| `--log-level trace` | capture the plugin's own `ciphertextLen`, cross-checked against the measured size in the *Plugin log* column |
+| `--format FMT` | `zip` (default), `tgz`, or `tar.zst` |
+| `--no-archive` | skip the archive, and its `zip`/`bsdtar` dependency |
+
+`tar.zst` compresses best, but GitHub only accepts `.zip`, `.gz` and `.tgz` as
+issue attachments — which is why `zip` is the default.
+

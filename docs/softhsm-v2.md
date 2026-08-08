@@ -1,22 +1,27 @@
-# [`SoftHSMv2`](https://github.com/softhsm/SoftHSMv2)
+---
+title: "SoftHSMv2"
+weight: 52
+---
+
+> ⚠️ **Legacy reference**: This guide is kept for backward compatibility. [`SoftHSMv3` (`pqctoday-hsm`)](./softhsm-v3.md) is now the recommended software HSM for development and integration testing — it supports all algorithm families including **ML-KEM**. SoftHSMv2 does **not** support ML-KEM.
 
 This guide describes how to set up [`SoftHSMv2`](https://github.com/softhsm/SoftHSMv2) and make it
 work with the `k8s-kms-plugin` in a **non production environment**.
 
 You should read `SoftHSMv2` official documentation before reading this guide.
 
-- [1. Install `SoftHSMv2`](#1-install-softhsmv2)
-  - [1.1. Install the required packages:](#11-install-the-required-packages)
-  - [1.2. Setup for rootless usage:](#12-setup-for-rootless-usage)
-  - [1.3. Create an AES Key in SoftHSMv2](#13-create-an-aes-key-in-softhsmv2)
-  - [1.4. Start the `k8s-kms-plugin serve`](#14-start-the-k8s-kms-plugin-serve)
-  - [1.5. Configure a kubernetes cluster](#15-configure-a-kubernetes-cluster)
-- [2. Using Env Vars Thanks to Viper](#2-using-env-vars-thanks-to-viper)
+- [Install `SoftHSMv2`](#install-softhsmv2)
+  - [Install the required packages:](#install-the-required-packages)
+  - [Setup for rootless usage:](#setup-for-rootless-usage)
+  - [Create an AES Key in SoftHSMv2](#create-an-aes-key-in-softhsmv2)
+  - [Start the `k8s-kms-plugin serve`](#start-the-k8s-kms-plugin-serve)
+  - [Configure a kubernetes cluster](#configure-a-kubernetes-cluster)
+- [Using Env Vars Thanks to Viper](#using-env-vars-thanks-to-viper)
 
 
-## 1. Install `SoftHSMv2`
+## Install `SoftHSMv2`
 
-### 1.1. Install the required packages:
+### Install the required packages:
 
 ```sh
 # debian
@@ -28,7 +33,7 @@ sudo apt install softhsm2 opensc
 sudo yum install epel-release softhsm opensc
 ```
 
-### 1.2. Setup for rootless usage:
+### Setup for rootless usage:
 
 Assuming you are using `bash` shell:
 
@@ -42,7 +47,7 @@ sudo usermod -aG softhsm $USER
 
 **Logout and login**.
 
-### 1.3. Create an AES Key in SoftHSMv2
+### Create an AES Key in SoftHSMv2
 
 Create a token:
 
@@ -90,7 +95,7 @@ warning: PKCS11 function C_GetAttributeValue(VALUE) failed: rv = CKR_ATTRIBUTE_S
   Access:     never extractable, local
 ```
 
-### 1.4. Start the `k8s-kms-plugin serve`
+### Start the `k8s-kms-plugin serve`
 
 aes-gcm mode
 
@@ -104,10 +109,11 @@ k8s-kms-plugin \
     --p11-label mylabel \
     --p11-pin mypin \
     --p11-key-label aes00softhsm \
-    --algorithm aes-gcm
+    --algorithm-family aes-gcm
 ```
 
 Alternatively, you can use `--p11-key-id` (PKCS #11 CKA_ID) instead of `--p11-key-label` (PKCS #11 CKA_LABEL).
+See [`CKA_ID` vs `CKA_LABEL`](./cli-user-interface/cka-id-vs-cka-label.md) for how the two are resolved.
 
 ```sh
 SOCKET="/run/user/$(id -u $USER)/k8s-kms-plugin.sock"
@@ -120,10 +126,10 @@ k8s-kms-plugin \
     --p11-label mylabel \
     --p11-pin mypin \
     --p11-key-id d73f87d08873be56 \
-    --algorithm aes-gcm
+    --algorithm-family aes-gcm
 ```
 
-You can validate Encryption and Decryption are working by using [`grpcurl-roundtrip-test.sh`](../scripts/grpcurl/grpcurl-roundtrip-test.sh).
+You can validate Encryption and Decryption are working by using [`grpcurl-roundtrip-test.sh`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/scripts/grpcurl/grpcurl-roundtrip-test.sh).
 
 ```bash
 ./grpcurl-roundtrip-test.sh 'hello world' /run/user/1000/k8s-kms-plugin.sock
@@ -141,9 +147,9 @@ You can validate Encryption and Decryption are working by using [`grpcurl-roundt
 
 If `grpcurl-roundtrip-test.sh` works, it should work with a kubernetes server node.
 
-### 1.5. Configure a kubernetes cluster
+### Configure a kubernetes cluster
 
-Then review the content of file [`encryption-conf-kmsv2-unix-socket.yaml`](../deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml).
+Then review the content of file [`encryption-conf-kmsv2-unix-socket.yaml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml).
 Make sure `resources.providers.kms.endpoint` points to the same unix socket file of the running `k8s-kms-plugin`.
 
 Then install a kubernetes cluster like `k3s` with the following command:
@@ -154,7 +160,7 @@ curl -sfL https://get.k3s.io | K3S_DEBUG=true INSTALL_K3S_VERSION=v1.33.1+k3s1 s
   --kube-apiserver-arg=encryption-provider-config=$HOME/k8s-kms-plugin/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml
 ```
 
-## 2. Using Env Vars Thanks to Viper
+## Using Env Vars Thanks to Viper
 
 > TODO: improve this section and harmonise the previous section to use viper's env vars
 
@@ -170,5 +176,5 @@ k8s-kms-plugin \
     --p11-label mylabel \
     --p11-pin mypin \
     --p11-key-label aes00softhsm \
-    --algorithm aes-gcm
+    --algorithm-family aes-gcm
 ```

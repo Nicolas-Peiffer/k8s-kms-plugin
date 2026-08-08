@@ -1,25 +1,28 @@
-# yubico YubiHSM 2
+---
+title: "YubiHSM 2"
+weight: 55
+---
 
 This guide will help you to set up a YubiHSM 2 and make it work with `k8s-kms-plugin` in a **non production environment**.
 
 ![](https://www.yubico.com/wp-content/uploads/2021/02/img-prods-home-5-hsm@2x.png)
 
-- [1. Before You Start: Read yubico YubiHSM 2 official documentation](#1-before-you-start-read-yubico-yubihsm-2-official-documentation)
-- [2. Testbed Environment](#2-testbed-environment)
-- [3. YubiHSM 2 Deployment Scenarios](#3-yubihsm-2-deployment-scenarios)
-- [4. Seting Up the YubiHSM 2](#4-seting-up-the-yubihsm-2)
-  - [4.1. Using YubiHSM 2 with Network/HTTP-based Connector](#41-using-yubihsm-2-with-networkhttp-based-connector)
-  - [4.2. Using YubiHSM 2 with USB only Connector](#42-using-yubihsm-2-with-usb-only-connector)
+- [Before You Start: Read yubico YubiHSM 2 official documentation](#before-you-start-read-yubico-yubihsm-2-official-documentation)
+- [Testbed Environment](#testbed-environment)
+- [YubiHSM 2 Deployment Scenarios](#yubihsm-2-deployment-scenarios)
+- [Seting Up the YubiHSM 2](#seting-up-the-yubihsm-2)
+  - [Using YubiHSM 2 with Network/HTTP-based Connector](#using-yubihsm-2-with-networkhttp-based-connector)
+  - [Using YubiHSM 2 with USB only Connector](#using-yubihsm-2-with-usb-only-connector)
 
 
-## 1. Before You Start: Read yubico YubiHSM 2 official documentation
+## Before You Start: Read yubico YubiHSM 2 official documentation
 
 You should read yubico YubiHSM 2 official documentation before reading this guide.
 https://docs.yubico.com/hardware/yubihsm-2/hsm-2-user-guide/index.html
 
 The purpose of this guide is to help you to set up a YubiHSM 2 and make it work with `k8s-kms-plugin`.
 
-## 2. Testbed Environment
+## Testbed Environment
 
 Unless otherwise specified, the commands from this guide were tested on AlmaLinux 9.6 on an x86_64 platform.
 
@@ -75,7 +78,7 @@ You might want to [reset to Factory Settings](https://docs.yubico.com/hardware/y
 
 Assuming your YubiHSM 2 has been reset and **assuming your are not in production but in a testing environment**, you can proceed with the following steps. Indeed for this guide, we will use the YubiHSM default session and domain with default passord `password` or `0001password`. On a production environment, configure and manage your YubiHSM 2 in a secure way.
 
-## 3. YubiHSM 2 Deployment Scenarios
+## YubiHSM 2 Deployment Scenarios
 
 The YubiHSM 2 is a USB device. The YubiHSM 2 supports two different connection methods:
 
@@ -88,9 +91,9 @@ The YubiHSM 2 is a USB device. The YubiHSM 2 supports two different connection m
 > 
 > ![](./images/k8s-kms-plugin-deployment-scenario-examples.svg)
 
-## 4. Seting Up the YubiHSM 2
+## Seting Up the YubiHSM 2
 
-### 4.1. Using YubiHSM 2 with Network/HTTP-based Connector
+### Using YubiHSM 2 with Network/HTTP-based Connector
 
 > **This is not a production environment:** we will use HTTP without TLS for the connector enpoint. Please read the Yubico document for how to configure and manage your YubiHSM 2 in a secure way.
 
@@ -253,29 +256,46 @@ connector = http://127.0.0.1:12345
 Now you have everything to run `k8s-kms-plugin serve` with the YubiHSM 2 using the network connector:
 
 ```bash
-k8s-kms-plugin
+k8s-kms-plugin \
   serve \
     --log-level=trace \
     --p11-lib /usr/lib64/pkcs11/yubihsm_pkcs11.so  \
     --p11-label YubiHSM \
     --p11-pin  0001password \
-    --kek-id  abcd \
-    --algorithm  rsa-oaep \
+    --p11-key-id  abcd \
+    --algorithm-family  rsa-oaep \
     --socket /run/user/1000/k8s-kms-plugin.sock
 ```
 
-Now fetch the protobuf API file `api.proto` from https://github.com/kubernetes/kms:
+`--p11-key-label` (PKCS #11 `CKA_LABEL`) works the same way as `--p11-key-id` (PKCS #11 `CKA_ID`)
+above. See [`CKA_ID` vs `CKA_LABEL`](./cli-user-interface/cka-id-vs-cka-label.md) for how the two are
+resolved.
+
+`grpcurl` needs the KMS v2 service definition, `api.proto`. Take it from the Go module cache, so it
+matches the `k8s.io/kms` version the plugin was built against — a proto from another release would
+have you exercising a contract the binary does not serve:
 
 ```bash
-wget https://raw.githubusercontent.com/kubernetes/kms/refs/tags/v0.34.1/apis/v2/api.proto
+API_PROTO="$(go list -m -f '{{.Dir}}' k8s.io/kms)/apis/v2/api.proto"
 ```
+
+If the module cache is empty, run `go mod download k8s.io/kms` first, or download the matching tag:
+
+```bash
+KMS_VERSION="$(go list -m -f '{{.Version}}' k8s.io/kms)"
+wget "https://raw.githubusercontent.com/kubernetes/kms/refs/tags/${KMS_VERSION}/apis/v2/api.proto"
+API_PROTO=api.proto
+```
+
+The [`scripts/grpcurl/`](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/scripts/grpcurl/)
+helpers do this for you.
 
 Now you can test a **StatusRequest** with `grpcurl`:
 
 ```bash
 grpcurl \
     -plaintext \
-    -proto api.proto \
+    -proto "$API_PROTO" \
     -d '{}' \
     -unix \
     unix:///run/user/1000/k8s-kms-plugin.sock \
@@ -297,7 +317,7 @@ Test an **EncryptRequest**:
 ```bash
 grpcurl \
     -plaintext \
-    -proto api.proto \
+    -proto "$API_PROTO" \
     -d '{"plaintext": "aGVsbG8gd29ybGQ=", "uid": "mock-123"}' \
     -unix \
     unix:///run/user/1000/k8s-kms-plugin.sock \
@@ -316,7 +336,7 @@ Test a **DecryptRequest**:
 ```bash
 grpcurl \
     -plaintext \
-    -proto api.proto \
+    -proto "$API_PROTO" \
     -d '{"ciphertext": "ZXlKaGJHY2lPaUpTVTBFdFQwRkZVQ0lzSW10cFpDSTZJamd3TkRFME1qQTFaR05qT1dKbU9XUTRaV1prWkdRMk5XUmpPVE15TWpnM1lURm1aamRsTUdZd1pUTmlNRGxqTldWaE1UWmpPVEU1TW1FMU1HVXdOellpTENKMGVYQWlPaUpLVjFRaUxDSmpkSGtpT2lKS1YxUWlMQ0psYm1NaU9pSkJNalUyUjBOTkluMC5yR3pHMmhJekVUN3IybHBTZk9hZUdZem93U3JsbjlfblBkZGdGTjFYZFFUc3VLUmE3U1JtRW9hQTBsSjE3UDYwQ2NZYWRCbWNvM1M3a2gxMG1nMmVSXzhTeDlkNElKcWRTX1RzVC00OFhQcklUYkNVcTRnTHh5dXhRcTVoREYxOFVwdFFxWmxUdFlMM3FKRjNHd2toUVNBS2stQVBFWXdGcUpfT0Z3NllxcU00YllyYlMtRVhMRllSUnVYWVM3VlJ0Y2VPdEFJUVJkLXFFdFVVc2ZPU19FZFdfdDBxS244aVdEb2FDSDNLUFZlZzB1MHg4ZUI0WjJ0bW1KRDRYeGZ2dlZNQm1XZXdYTTg3QldBTkh6TjNIU1FOc0FTQm9RcWxBLU04b0lIbWdXb1l6TUNqTTVkNkVJR3pkWmRSRmpQdnA2bGRucGJMUGNmeHZwUWxMM254dHlPaFRRd3JpclNhZ2Y1Wk1UcDVrRU94bXNoamQ5Vnc5SFFJM2NBc0JPSDBZblBacXlrM1U1UGU1a3h1RTU5M1dhM2JxMmRDQTNLaGxIYzRpQkRLWms3RUMtMERVYU5MU0ZIdzdtZFFDVy04d1YxV2tlWS14SjNtYUZUVC1XU1RxYkhyQXFyV29vakhITmo3QmRZNmxEcHVWT2FkU283R19naW1UWXlXc3dvcEhJem9jLVJaaFJCR1RPTU1HWXRmTUR4NkhtVmJpV1AxWVZnd0JVZzNnZWtMQ2NJYmxRQmdNczY5aXhRNWN2eDQxY25fR055aUNmVXQzTFlkUjF6Tl9FZnNicWFiVDZiS3JFaTlmbG9EeFh6YWIweC1qR3NjSm1ycEF4ZkJ1R3hpQk9VMzctMXViNDJmOUtsSzV3LW4tbm84UDZHcWdXMkx6UGxqM05NTmlXYy5fOExFeElZYXc3bV9fbWh6LkF4ZVFZRGx2ZlZwUFBFdy5mVlgzVDdER3I0TzVGRDRaX1lORUhR", "uid": "test-dec-1", "key_id":"abcd"}' \
     -unix \
     unix:///run/user/1000/k8s-kms-plugin.sock \
@@ -329,9 +349,9 @@ grpcurl \
 }
 ```
 
-You can also test a full Status, Encryption and Decryption roundtrip using the script [`grpcurl-roundtrip-test.sh`](../scripts/grpcurl/grpcurl-roundtrip-test.sh).
+You can also test a full Status, Encryption and Decryption roundtrip using the script [`grpcurl-roundtrip-test.sh`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/scripts/grpcurl/grpcurl-roundtrip-test.sh).
 
-### 4.2. Using YubiHSM 2 with USB only Connector
+### Using YubiHSM 2 with USB only Connector
 
 
 1. Insert the YubiHSM 2 in one USB slot of your machine.
@@ -439,7 +459,7 @@ You can also test a full Status, Encryption and Decryption roundtrip using the s
           --p11-label YubiHSM \
           --p11-pin 0001password \
           --p11-key-label rsa4096n001 \
-          --algorithm rsa-oaep
+          --algorithm-family rsa-oaep
   ```
 
   <details>

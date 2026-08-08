@@ -11,11 +11,15 @@ deployed.json
 k8s-kms-plugin
 !k8s-kms-plugin/
 
+# vscode project files
+.vscode
+
 # dev
 pkg/crypto11
 pkg/gose
 TODO.md
 k8s-kms-plugin-dlv
+create-dev-token
 
 # If you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
@@ -41,3 +45,29 @@ go.work
 
 # output for build
 dist/
+
+# Env vars
+.env
+
+# gRPC protobuf
+api.proto
+
+# Sample collection from scripts/grpcurl/collect-jwe-samples.sh
+# The glob covers every --format: .zip, .tgz and .tar.zst
+jwe-samples/
+jwe-samples.*
+
+# Documents
+*.pdf
+*.PDF
+*.bkp
+*.drawio.bkp
+
+# Code assistants
+.claude
+# Hugo documentation site (website/)
+website/public/
+website/resources/
+website/.hugo_build.lock
+# Vendored JS for an offline site build; see website/hugo.toml [params.mermaid]
+website/assets/js/

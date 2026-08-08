@@ -1,0 +1,154 @@
+# SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+# SPDX-License-Identifier: MIT
+#
+# Builds the documentation site (Hugo + Hextra) and publishes it to GitHub Pages.
+#
+# Two jobs on purpose: `build` runs on every pull request touching the documentation, so a broken
+# link or a Hugo error is caught in review, and `deploy` runs only on master. The deploy job holds
+# the `pages: write` and `id-token: write` permissions, so pull requests from forks never get them.
+#
+# Requires the repository's Pages source to be set to "GitHub Actions"
+# (Settings -> Pages -> Build and deployment -> Source).
+#
+# Third-party actions are pinned to a commit SHA, matching the rest of this repository and the
+# Pinned-Dependencies check in OpenSSF Scorecard.
+
+name: Docs
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'scripts/check-doc-links.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'scripts/check-doc-links.py'
+      - '.github/workflows/docs.yml'
+  # Allows publishing on demand. Note that GitHub only offers this for workflows that exist on the
+  # repository's default branch — a copy on a feature branch cannot be dispatched.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer commit supersedes an in-flight docs build. Deploys are not cancelled mid-flight, since a
+# half-published site is worse than a slightly stale one.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  HUGO_VERSION: '0.164.0'
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v5.0.0
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          # Hugo's .Lastmod and the "last updated" footer read commit dates.
+          fetch-depth: 0
+
+      # actions/setup-go v6.0.0 — Hugo is a Go program and the theme is a Hugo Module, so the Go
+      # toolchain is all that is needed to install and run it.
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Not the extended build: Hextra ships its Tailwind CSS precompiled, so there is no SCSS to
+      # transpile and no C toolchain needed here.
+      - name: Install Hugo
+        run: go install github.com/gohugoio/hugo@v${{ env.HUGO_VERSION }}
+
+      - name: Verify documentation links
+        run: python3 scripts/check-doc-links.py
+
+      # The generated CLI reference is committed. If it is stale the published site would document
+      # flags that no longer exist, so regenerate and fail on any difference. `make doc` is
+      # reproducible, which is what makes this check meaningful rather than noisy.
+      #
+      # --provenance=false is required here: the flag otherwise defaults to true under
+      # GITHUB_ACTIONS, and the commit hash and run URL it stamps in would differ from the committed
+      # files on every single run, failing the check for no reason.
+      - name: Check the generated CLI reference is up to date
+        run: |
+          make doc DOC_FLAGS=--provenance=false
+          if ! git diff --quiet -- docs/cli-user-interface/; then
+            echo "::error::docs/cli-user-interface/ is out of date — run 'make doc' and commit the result"
+            git --no-pager diff --stat -- docs/cli-user-interface/
+            exit 1
+          fi
+
+      # Now regenerate *with* provenance so the published pages carry the version, commit and a link
+      # back to this exact run. GITHUB_ACTIONS=true enables it, so no flag is needed. These edits
+      # stay in the runner's working tree and are never committed.
+      - name: Stamp build provenance into the generated reference
+        run: make doc
+
+      # The Pages URL is derived from the owner and repository rather than read back from the Pages
+      # API, so the build job needs no Pages permissions at all and the same config publishes from a
+      # fork and from upstream. GitHub Pages hostnames are lowercase, hence the tr.
+      - name: Build site
+        run: |
+          owner=$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          repo="${{ github.event.repository.name }}"
+          if [ "$repo" = "$owner.github.io" ]; then
+            # A user or organisation site is served from the domain root, not a subpath.
+            base="https://$owner.github.io/"
+          else
+            base="https://$owner.github.io/$repo/"
+          fi
+          echo "Building with baseURL $base"
+          cd website && hugo --gc --minify --baseURL "$base"
+
+      # actions/upload-pages-artifact v5.0.0
+      #
+      # Publish from the repository's DEFAULT branch rather than a hardcoded "master": that is what
+      # lets a fork publish from its own default branch and upstream from its own, with nothing to
+      # change. Pull requests build but never publish.
+      - name: Upload artifact
+        if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
+        with:
+          path: website/public
+
+  deploy:
+    name: Deploy to Pages
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write      # to publish to Pages
+      id-token: write   # to let the Pages service verify the deployment's origin
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Never cancel a deploy in progress, and never run two at once.
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
+    steps:
+      # actions/configure-pages v6.0.0
+      #
+      # Lives here, not in the build job, so `pages: write` stays out of a job that also runs for
+      # pull requests. enablement:true creates the Pages site on first run if it does not exist yet,
+      # which removes the manual "Settings -> Pages -> Source: GitHub Actions" step — without it the
+      # very first deploy fails on a repository that has never had Pages turned on.
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
+        with:
+          enablement: true
+
+      # actions/deploy-pages v5.0.0
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128

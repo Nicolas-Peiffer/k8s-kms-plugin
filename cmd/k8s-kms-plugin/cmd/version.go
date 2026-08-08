@@ -1,19 +1,14 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
 package cmd
 
 import (
 	"fmt"
 
-	version "github.com/ThalesGroup/k8s-kms-plugin/pkg/version"
-	"github.com/sirupsen/logrus"
+	"log/slog"
+
+	version "github.com/eclipse-keysealer/k8s-kms-plugin/pkg/version"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -39,23 +34,31 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version information.",
 	Long: `Print the version information with various level of details
-including information of the build and git repository metadata.
+including information of the build and git repository metadata.`,
+	// Examples belong in Example, not Long: cobra's markdown generator wraps this field in a
+	// fenced code block, whereas the two-space indentation they had inside Long is below the four
+	// Markdown needs for a code block — so the "# ..." comment lines were parsed as level-1
+	// headings and rendered as page titles on GitHub and on the documentation site.
+	Example: `
+Print the version with git repository details as a one-line JSON string:
+	k8s-kms-plugin version -o json --pretty=false
 
-Examples:
-  # print the version information with git repository details as a one liner
-  # JSON string.
-  k8s-kms-plugin version -o json --pretty=false`,
+Print the version as indented YAML:
+	k8s-kms-plugin version -o yaml
+`,
 	// Initialize and populate cobra CLI flags values with viper during the Persistent pre-run
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		if err := InitViperSubCmdE(viper.GetViper(), cmd, &vprFlgsVersion); err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).WithError(err).Error("Error initializing Viper")
+			slog.Error("Error initializing Viper", "cobra_cmd", cmd.Use, "error", err)
 			return err
 		}
 		return nil
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, _ []string) {
 		// Output version info
-		fmt.Fprintln(cmd.OutOrStdout(), version.VersionOutputToString(vprFlgsVersion.OutputFormat, vprFlgsVersion.PrettyPrintVersion))
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), version.OutputToString(vprFlgsVersion.OutputFormat, vprFlgsVersion.PrettyPrintVersion)); err != nil {
+			slog.Error("error writing version output", "error", err)
+		}
 	},
 }
 
@@ -69,11 +72,15 @@ func init() {
 
 	// Here you will define your flags and configuration settings.
 	versionCmd.Flags().StringVarP(&outputFormat, "output", "o", "", "Format of the version output. One of 'yaml' or 'json'. Env var: K8S_KMS_PLUGIN_VERSION_OUTPUT")
-	versionCmd.RegisterFlagCompletionFunc("output", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if err := versionCmd.RegisterFlagCompletionFunc("output", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"yaml", "json"}, cobra.ShellCompDirectiveNoFileComp
-	})
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "output", "error", err)
+	}
 	versionCmd.Flags().BoolVarP(&prettyPrintVersion, "pretty", "P", true, "Activate pretty print output for JSON. Env var: K8S_KMS_PLUGIN_VERSION_PRETTY")
-	versionCmd.RegisterFlagCompletionFunc("pretty", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if err := versionCmd.RegisterFlagCompletionFunc("pretty", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"true", "false"}, cobra.ShellCompDirectiveNoFileComp
-	})
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "pretty", "error", err)
+	}
 }

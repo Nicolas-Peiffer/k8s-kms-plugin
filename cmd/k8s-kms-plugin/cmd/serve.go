@@ -1,11 +1,5 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
 package cmd
 
@@ -13,53 +7,42 @@ package cmd
 //   - gose
 //   - crypto11
 import (
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"time"
 
-	"github.com/ThalesGroup/crypto11"
-	"github.com/ThalesGroup/gose"
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/crypto11/v2"
+	"github.com/eclipse-keypont/gose/jose"
 
-	istio "github.com/ThalesGroup/k8s-kms-plugin/apis/istio/v1"
-	version "github.com/ThalesGroup/k8s-kms-plugin/pkg/version"
 	k8skmsv2 "k8s.io/kms/apis/v2"
 
-	"github.com/ThalesGroup/k8s-kms-plugin/pkg/providers"
-	"github.com/sirupsen/logrus"
+	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/logging"
+	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/providers"
+	version "github.com/eclipse-keysealer/k8s-kms-plugin/pkg/version"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 // ViperFlagsServe defines a struct to hold the values of cobra CLI flags and use viper to populate them
 type ViperFlagsServe struct {
-	// gRPC server parameters
-	AllowAny      bool   `mapstructure:"allow-any"`
-	DisableSocket bool   `mapstructure:"disable-socket"`
-	EnableTCP     bool   `mapstructure:"enable-server"`
-	Host          string `mapstructure:"host"`
-	Port          uint16 `mapstructure:"port"`
-	ServerTLSCert string `mapstructure:"tls-certificate"`
-	ServerTLSKey  string `mapstructure:"tls-key"`
-	CaTLSCert     string `mapstructure:"tls-ca"`
-
 	// PKCS #11 & KMS plugin parameters
-	Algorithm  string `mapstructure:"algorithm"`
-	CaID       string `mapstructure:"ca-id"`
-	NativePath string `mapstructure:"native-path"`
-	P11Label   string `mapstructure:"p11-label"`
-	P11Lib     string `mapstructure:"p11-lib"`
-	P11Pin     string `mapstructure:"p11-pin"`
-	P11Slot    int    `mapstructure:"p11-slot"`
-	Provider   string `mapstructure:"provider"`
-	SocketPath string `mapstructure:"socket"` // Unix socket path for TPM or HSM
+	AlgorithmFamily string `mapstructure:"algorithm-family"`
+	NativePath      string `mapstructure:"native-path"`
+	P11Label        string `mapstructure:"p11-label"`
+	P11Lib          string `mapstructure:"p11-lib"`
+	P11Pin          string `mapstructure:"p11-pin"`
+	P11Slot         int    `mapstructure:"p11-slot"`
+	Provider        string `mapstructure:"provider"`
+	SocketPath      string `mapstructure:"socket"` // Unix socket path
 
 	// PKCS #11 CKA_ID and CKA_LABEL of active KEK key
 	CreateKey    bool   `mapstructure:"auto-create"`
@@ -72,29 +55,70 @@ type ViperFlagsServe struct {
 // Declare the viper CLI flag values buffer
 var vprFlgsServe ViperFlagsServe
 
-// Algorithm supports user input for configuration
-type Algorithm struct {
-	slug string
-}
+// AlgorithmFamily is the user-facing algorithm selector. It names the cryptographic
+// mechanism only — key size and parameter set are derived from the HSM key at runtime.
+type AlgorithmFamily string
 
-var (
-	UNKNOWNALG = Algorithm{""}
-	AESGCM     = Algorithm{"aes-gcm"}
-	AESCBC     = Algorithm{"aes-cbc"}
-	RSAOAEP    = Algorithm{"rsa-oaep"}
+// Supported AlgorithmFamily values.
+const (
+	AlgorithmFamilyAESGCM  AlgorithmFamily = "aes-gcm"
+	AlgorithmFamilyAESCBC  AlgorithmFamily = "aes-cbc"
+	AlgorithmFamilyRSAOAEP AlgorithmFamily = "rsa-oaep"
+	AlgorithmFamilyMLKEM   AlgorithmFamily = "ml-kem"
 )
 
-func algFromString(s string) (jose.Alg, error) {
-	switch s {
-	case AESGCM.slug:
-		return jose.AlgA256GCM, nil
-	case AESCBC.slug:
-		return jose.AlgA256CBC, nil
-	case RSAOAEP.slug:
-		return jose.AlgRSAOAEP, nil
-	default:
-		return "", gose.ErrInvalidAlgorithm
+// String implements pflag.Value.
+func (a *AlgorithmFamily) String() string { return string(*a) }
+
+// Type implements pflag.Value.
+func (a *AlgorithmFamily) Type() string { return "algorithmFamily" }
+
+// Set implements pflag.Value so cobra validates the flag at parse time.
+func (a *AlgorithmFamily) Set(s string) error {
+	if err := validateAlgorithmFamily(s); err != nil {
+		return err
 	}
+	*a = AlgorithmFamily(s)
+	return nil
+}
+
+// validateAlgorithmFamily is used both by AlgorithmFamily.Set (CLI flag path) and
+// PersistentPreRunE (config file / env var path).
+func validateAlgorithmFamily(s string) error {
+	switch AlgorithmFamily(s) {
+	case AlgorithmFamilyAESGCM, AlgorithmFamilyAESCBC, AlgorithmFamilyRSAOAEP, AlgorithmFamilyMLKEM:
+		return nil
+	default:
+		return fmt.Errorf("must be one of aes-gcm, aes-cbc, rsa-oaep, ml-kem; got %q", s)
+	}
+}
+
+const (
+	// maxCkaLabelBytes is the PKCS#11 CKA_LABEL maximum (mirrored from pkg/providers).
+	maxCkaLabelBytes = 255
+	// maxUnixSocketPathLen is the Linux UNIX_PATH_MAX minus one byte for the null terminator.
+	maxUnixSocketPathLen = 107
+)
+
+// sanitizeViperFlagsServe validates all user-controlled fields in ViperFlagsServe after
+// viper has resolved them from all input sources (CLI flags, config file, env vars).
+func sanitizeViperFlagsServe(f *ViperFlagsServe) error {
+	if err := validateAlgorithmFamily(f.AlgorithmFamily); err != nil {
+		return fmt.Errorf("--algorithm-family: %w", err)
+	}
+	if len(f.P11Label) > maxCkaLabelBytes {
+		return fmt.Errorf("--p11-label: length %d exceeds maximum of %d bytes", len(f.P11Label), maxCkaLabelBytes)
+	}
+	if len(f.DekKeyLabel) > maxCkaLabelBytes {
+		return fmt.Errorf("--p11-key-label: length %d exceeds maximum of %d bytes", len(f.DekKeyLabel), maxCkaLabelBytes)
+	}
+	if len(f.HmacKeyLabel) > maxCkaLabelBytes {
+		return fmt.Errorf("--p11-hmac-label: length %d exceeds maximum of %d bytes", len(f.HmacKeyLabel), maxCkaLabelBytes)
+	}
+	if len(f.SocketPath) > maxUnixSocketPathLen {
+		return fmt.Errorf("--socket: path length %d exceeds Unix socket maximum of %d bytes", len(f.SocketPath), maxUnixSocketPathLen)
+	}
+	return nil
 }
 
 // serveCmd represents the serve command
@@ -106,10 +130,13 @@ Use "k8s-kms-plugin serve rotation" subcommand to support key rotation.
 Kubernetes KMS documentation: https://kubernetes.io/docs/tasks/administer-cluster/kms-provider/#configuring-the-kms-provider-kms-v2
 
 KMS v2 API: https://pkg.go.dev/k8s.io/kms@v0.34.1/apis/v2
+
+How --p11-key-id / --p11-key-label (and --p11-hmac-id / --p11-hmac-label) are resolved:
+docs/cli-user-interface/cka-id-vs-cka-label.md
 `,
 	Example: `
 Using flags and serving on unix socket (gRPC plaintext):
-	k8s-kms-plugin 
+	k8s-kms-plugin
 	  serve \
 		--log-level=info \
 		--socket /run/user/1000/k8s-kms-plugin.sock \
@@ -117,7 +144,7 @@ Using flags and serving on unix socket (gRPC plaintext):
 		--p11-label mylabel \
 		--p11-pin mypin \
 		--p11-key-label rsa0 \
-		--algorithm rsa-oaep
+		--algorithm-family rsa-oaep
 
 Using both environment variables and configuration file and serving on unix socket:
 	K8S_KMS_PLUGIN_SERVE_P11_PIN="mypin" k8s-kms-plugin serve --config my-kms-plugin-config.yaml
@@ -126,7 +153,7 @@ Using both CLI Flags, environment variables and configuration file and serving o
 	K8S_KMS_PLUGIN_SERVE_P11_PIN="mypin" k8s-kms-plugin --log-format=json serve --config my-kms-plugin-config.yaml
 
 Using AES-CBC with HMAC authentication, using CKA_ID, using CLI flags and serving on unix socket:
-	k8s-kms-plugin 
+	k8s-kms-plugin
 	  serve \
 		--log-level=trace  \
 		--socket /run/user/1000/k8s-kms-plugin.sock \
@@ -135,66 +162,55 @@ Using AES-CBC with HMAC authentication, using CKA_ID, using CLI flags and servin
 		--p11-pin mypin \
 		--p11-key-id 64636138353931326363356537313264 \
 		--p11-hmac-id 30663536623936326235663530363234 \
-		--algorithm aes-cbc
+		--algorithm-family aes-cbc
 `,
 	GroupID: "kmscmdsgrpmain",
 	// Initialize and populate cobra CLI flags values with viper during the Persistent pre-run
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		if err := InitViperSubCmdE(viper.GetViper(), cmd, &vprFlgsServe); err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).WithError(err).Error("Error initializing Viper")
+			slog.Error("Error initializing Viper", "cobra_cmd", cmd.Use, "error", err)
+			return err
+		}
+		if err := sanitizeViperFlagsServe(&vprFlgsServe); err != nil {
 			return err
 		}
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) (err error) {
+	RunE: func(cmd *cobra.Command, _ []string) (err error) {
 		// Show the version of the k8s-kms-plugin and commit ID
-		version.LogrusOutputVersion()
+		version.LogVersion()
+
+		if vprFlgsServe.P11Pin, err = resolvePin(viper.GetViper(), "p11-pin", "Enter HSM PIN: "); err != nil {
+			return
+		}
 
 		// Don't panic/exit if we have a PKCS#11 error.
 		// Sleep forever instead.
 		var p providers.Provider
 		p, err = initProvider()
 		if err != nil && providers.IsPKCS11AuthenticationError(err) {
-			logrus.WithField("cobra-cmd", cmd.Use).
-				WithError(err).
-				Error("PKCS11 authentication error detected. Further retries may cause the token to be erased.")
-			logrus.WithField("cobra-cmd", cmd.Use).Warn("Process will now sleep indefinitely to prevent further damage...")
+			slog.Error("PKCS11 authentication error detected. Further retries may cause the token to be erased.", "cobra_cmd", cmd.Use, "error", err)
+			slog.Warn("Process will now sleep indefinitely to prevent further damage...", "cobra_cmd", cmd.Use)
 			time.Sleep(8760 * time.Hour)
 		}
 
 		if err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).Fatalf("failed to initialize provider: %v", err)
+			logging.Fatal("failed to initialize provider", "cobra_cmd", cmd.Use, "error", err)
 		}
 
-		g := new(errgroup.Group)
-		var grpcTCP, grpcUNIX net.Listener
-
-		if vprFlgsServe.EnableTCP {
-			// vprFlgsServe.Port needs to be converted from uint16 to string
-			grpcAddr := net.JoinHostPort(vprFlgsServe.Host, strconv.FormatUint(uint64(vprFlgsServe.Port), 10))
-
-			if grpcTCP, err = net.Listen("tcp", grpcAddr); err != nil {
-				return
-			}
-
-			g.Go(func() error { return grpcServe(grpcTCP, p) })
+		_ = os.Remove(vprFlgsServe.SocketPath)
+		var grpcUNIX net.Listener
+		if grpcUNIX, err = net.Listen("unix", vprFlgsServe.SocketPath); err != nil {
+			return
+		}
+		// Grant group read/write so a co-located client (e.g. kube-apiserver
+		// running under a shared gid) can connect to the socket.
+		if chmodErr := os.Chmod(vprFlgsServe.SocketPath, 0775); chmodErr != nil { //nolint:gosec // group access is intentional, see comment above
+			slog.Error("error setting socket permissions", "path", vprFlgsServe.SocketPath, "error", chmodErr)
 		}
 
-		if !vprFlgsServe.DisableSocket {
-			_ = os.Remove(vprFlgsServe.SocketPath)
-			if grpcUNIX, err = net.Listen("unix", vprFlgsServe.SocketPath); err != nil {
-				return
-			}
-
-			// Istiod runs with uid and gid 1337, but the plugin runs with uid 0 and
-			// gid 1337.  Change the socket permissions so the group has read/write
-			// access to the socket.
-			os.Chmod(vprFlgsServe.SocketPath, 0775)
-			g.Go(func() error { return grpcServe(grpcUNIX, p) })
-		}
-
-		if err = g.Wait(); err != nil {
-			logrus.WithField("cobra-cmd", cmd.Use).Error(err)
+		if err = grpcServe(grpcUNIX, p); err != nil {
+			slog.Error("gRPC server error", "cobra_cmd", cmd.Use, "error", err)
 		}
 
 		return
@@ -209,42 +225,33 @@ func init() {
 	// (like StringVar, BoolVar, Uint16Var, etc...) as we do not need to access the cobra flag values directly. This is
 	// because we use Viper to retrieve the values of the flags.
 
-	// unix socket server options
-	serveCmd.PersistentFlags().Bool("disable-socket", false, "Disable socket based server.")
-
-	// tcp server options
-	serveCmd.PersistentFlags().Bool("enable-server", false, "Enable TLS based server.")
-	serveCmd.PersistentFlags().String("tls-ca", "certs/ca.crt", "TLS CA cert.")
-	serveCmd.PersistentFlags().String("tls-key", "certs/tls.key", "TLS server key.")
-	serveCmd.PersistentFlags().String("tls-certificate", "certs/tls.crt", "TLS server cert.")
-
-	serveCmd.PersistentFlags().Bool("allow-any", false, "Allow any device (accepts all ids/secrets).")
-
-	serveCmd.PersistentFlags().String("algorithm", "aes-gcm", "Set the algorithm for encryption/decryption. Possible values: aes-gcm, aes-cbc, rsa-oaep.")
-	serveCmd.RegisterFlagCompletionFunc("algorithm", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"aes-gcm", "aes-cbc", "rsa-oaep"}, cobra.ShellCompDirectiveNoFileComp
-	})
+	algFamilyDefault := AlgorithmFamilyAESGCM
+	serveCmd.PersistentFlags().Var(&algFamilyDefault, "algorithm-family", "Encryption mechanism. Possible values: aes-gcm, aes-cbc, rsa-oaep, ml-kem.")
+	if err := serveCmd.RegisterFlagCompletionFunc("algorithm-family", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return []string{"aes-gcm", "aes-cbc", "rsa-oaep", "ml-kem"}, cobra.ShellCompDirectiveNoFileComp
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "algorithm-family", "error", err)
+	}
 
 	// These flags comes from root
 	// These flags does not need to store their values in variable because we use the viper structure ViperFlagsServe to do this
-	serveCmd.PersistentFlags().String("ca-id", defaultCaId, "Cert ID for CA Cert record.")
 	serveCmd.PersistentFlags().Bool("auto-create", false, "Auto create the keys if needed.")
-	serveCmd.PersistentFlags().String("p11-key-label", "", "Key Label CKA_LABEL to use for encrypt/decrypt.")
-	serveCmd.PersistentFlags().String("p11-hmac-label", "", "Key Label CKA_LABEL to use for sha based verifications.")
-	serveCmd.PersistentFlags().String("host", "0.0.0.0", "Hostname without port.")
+	serveCmd.PersistentFlags().String("p11-key-label", "", "Key Label (CKA_LABEL) for the KMS KEK. The key must have a CKA_ID set on the HSM — it is stored as the KEK ID in Kubernetes etcd.")
+	serveCmd.PersistentFlags().String("p11-hmac-label", "", "Key Label (CKA_LABEL) for the HMAC key. The key must have a CKA_ID set on the HSM.")
 	serveCmd.PersistentFlags().String("p11-key-id", "", "Key ID CKA_ID for KMS KEK.")
 	serveCmd.PersistentFlags().String("p11-hmac-id", "", "Key ID CKA_ID for KMS HMAC.")
 	serveCmd.PersistentFlags().StringP("native-path", "p", ".keys", "Path to key store for native provider(Files only).")
 	serveCmd.PersistentFlags().String("p11-label", "", "P11 token label.")
 	serveCmd.PersistentFlags().String("p11-lib", "", "Path to p11 library/client.")
-	serveCmd.PersistentFlags().String("p11-pin", "", "P11 Pin.")
+	serveCmd.PersistentFlags().String("p11-pin", "", "HSM PIN. If omitted, prompted interactively (input hidden). Pass an empty string explicitly to use a no-PIN token.")
 	serveCmd.PersistentFlags().Int("p11-slot", 0, "P11 token slot.")
-	serveCmd.PersistentFlags().Uint16("port", 31400, "TCP Port for gRPC service.")
 	// Provider
 	serveCmd.PersistentFlags().String("provider", "p11", "Provider. Possible values: p11, softhsm, luna, dpod.")
-	serveCmd.RegisterFlagCompletionFunc("provider", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if err := serveCmd.RegisterFlagCompletionFunc("provider", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"p11", "softhsm", "luna", "dpod"}, cobra.ShellCompDirectiveNoFileComp
-	})
+	}); err != nil {
+		slog.Error("error registering flag completion function", "flag", "provider", "error", err)
+	}
 
 	// Socket
 	serveCmd.PersistentFlags().String("socket", filepath.Join(os.TempDir(), "run", "hsm-plugin-server.sock"), "Unix Socket. Example: /run/user/$(id -u $USER)/k8s-kms-plugin.sock.")
@@ -259,17 +266,14 @@ func init() {
 }
 
 func initProvider() (p providers.Provider, err error) {
-	// init the algorithm to use in the kms from user input
-	alg, err := algFromString(vprFlgsServe.Algorithm)
-	if err != nil {
-		return
-	}
+	// Validated by sanitizeViperFlagsServe; cast directly to the provider sentinel.
+	alg := jose.Alg(vprFlgsServe.AlgorithmFamily)
 
 	// init the provider config from user input
 	config := &crypto11.Config{}
 	switch vprFlgsServe.Provider {
 	case "p11", "softhsm":
-		logrus.Debug("initProvider: case p11 or softhsm")
+		slog.Log(context.Background(), logging.LevelTrace, "initProvider: case p11 or softhsm")
 		config = &crypto11.Config{
 			Path:            vprFlgsServe.P11Lib,
 			Pin:             vprFlgsServe.P11Pin,
@@ -277,7 +281,7 @@ func initProvider() (p providers.Provider, err error) {
 		}
 
 	case "luna", "dpod":
-		logrus.Debug("initProvider: case luna HSM or dpod")
+		slog.Log(context.Background(), logging.LevelTrace, "initProvider: case luna HSM or dpod")
 		config = &crypto11.Config{
 			Path:            vprFlgsServe.P11Lib,
 			Pin:             vprFlgsServe.P11Pin,
@@ -288,7 +292,7 @@ func initProvider() (p providers.Provider, err error) {
 			},
 		}
 	default:
-		logrus.WithField("provider", vprFlgsServe.Provider).Error("unknown provider")
+		slog.Error("unknown provider", "provider", vprFlgsServe.Provider)
 		err = errors.New("unknown provider")
 		return
 	}
@@ -299,7 +303,7 @@ func initProvider() (p providers.Provider, err error) {
 		config.SlotNumber = &vprFlgsServe.P11Slot
 	}
 	// init the provider for active key only (no key rotation)
-	// TODO: See https://github.com/ThalesGroup/k8s-kms-plugin/issues/40#issuecomment-2593267852
+	// TODO: See https://github.com/eclipse-keysealer/k8s-kms-plugin/issues/40#issuecomment-2593267852
 	if p, err = providers.NewP11(
 		config,
 		vprFlgsServe.CreateKey,
@@ -322,7 +326,7 @@ func initProvider() (p providers.Provider, err error) {
 }
 
 func grpcServe(gl net.Listener, p providers.Provider) (err error) {
-	logrus.Trace("grpcServe")
+	slog.Log(context.Background(), logging.LevelTrace, "grpcServe")
 
 	// Create a gRPC server to host the services
 	serverOptions := []grpc.ServerOption{
@@ -333,21 +337,19 @@ func grpcServe(gl net.Listener, p providers.Provider) (err error) {
 
 	k8skmsv2.RegisterKeyManagementServiceServer(gs, p)
 	reflection.Register(gs)
-	istio.RegisterKeyManagementServiceServer(gs, p)
 
-	logrus.Infof("Serving on socket: %s", gl.Addr().String())
-	logrus.Debugf("grpcServe: value of grpcPort user input: %d", vprFlgsServe.Port)
+	slog.Info("serving on socket", "address", gl.Addr().String())
 
 START:
 	if err = gs.Serve(gl); err != nil {
-		logrus.Error(err)
+		slog.Error("gRPC serve error", "error", err)
 		goto START
 	}
 	return
 }
 
-func unknownServiceHandler(srv interface{}, stream grpc.ServerStream) error {
+func unknownServiceHandler(srv interface{}, _ grpc.ServerStream) error {
 	typeOfSrv := reflect.TypeOf(srv)
-	logrus.Infof("unknownServiceHandler. Looking for: %v, %v", typeOfSrv, srv)
+	slog.Info("unknown service handler", "type", typeOfSrv, "service", srv)
 	return nil
 }
