@@ -24,6 +24,7 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 > `make check-doc-links` after moving or renaming anything here, and `make site` (which runs
 > `make check-site`) to confirm the published output still resolves.
 
+- [Where to Find What](#where-to-find-what)
 - [Getting started](#getting-started)
 - [Concepts & architecture](#concepts--architecture)
 - [Cryptographic reference](#cryptographic-reference)
@@ -34,52 +35,109 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 - [Helper tools \& scripts](#helper-tools--scripts)
 - [Diagrams \& images](#diagrams--images)
 
+## Where to Find What
+
+| I want to…                                                 | Go to |
+|------------------------------------------------------------|-------|
+| Get something running in a few minutes                     | [Quick start](#getting-started) below — SoftHSMv3, then `KinD` |
+| Set up an HSM, a TPM or a software HSM                      | [HSM & TPM guides](./hsm-guides/README.md) |
+| Know which algorithm families were tested on my device      | [HSM & TPM Supported Platforms](./hsm-guides/README.md#hsm--tpm-supported-platforms) |
+| Make a Kubernetes cluster use the plugin                    | [Kubernetes integration guides](./kubernetes-guides/README.md) |
+| Install a package, or build from source                     | [Installation](./installation.md) |
+| Check a download is genuine                                 | [Verify what you downloaded](./installation.md#verify-what-you-downloaded) |
+| Look up a command, a flag or its environment variable       | [CLI reference](./cli-user-interface/README.md) |
+| Understand what actually happens to my Secrets              | [Concepts & Architecture](./overview.md), then [Cryptographic Schemes](./cryptographic-schemes.md) |
+| Rotate a KEK                                                | [Key Rotation Support](./overview.md#key-rotation-support), and [`k3s`](./kubernetes-guides/k3s-kubernetes.md) for a worked example |
+| Test the gRPC API without a cluster, or stage a `KinD` env  | [Helper tools & scripts](#helper-tools--scripts) below |
+| Debug the plugin                                            | [Debug Environment](./development.md#debug-environment-) |
+| Verify a release's signature or SLSA provenance             | [Supply Chain Security](./supply-chain-security.md) |
+
 ## Getting started
+
+**Quick start** — two steps, no hardware needed. Do them in order:
+
+| Step | Guide | What you get |
+|------|-------|--------------|
+| 1 | [SoftHSMv3 (`pqctoday-hsm`)](./hsm-guides/softhsm-v3.md) | A software PKCS #11 provider with a key per algorithm family, and `k8s-kms-plugin serve` running against it — including ML-KEM |
+| 2 | [`KinD`](./kubernetes-guides/kind-kubernetes.md) | A single-node Kubernetes cluster encrypting its Secrets through that plugin, deleted again in one command |
+
+Then, as you need them:
 
 | Page | What it covers |
 |------|----------------|
-| [Quick Start](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md#-quick-start-) | The two-step fast path: a software HSM, then a throwaway Kubernetes cluster |
-| [Installation](./installation.md) | Kubernetes requirements, packages (`apk`, `deb`, `rpm`, `archlinux`), `go install`, building from source with `make` or `goreleaser`, container images |
-| [Usage & User Guides](./usage.md) | CLI help, shell completion, the generated CLI reference, configuration precedence, and the HSM/TPM support matrix |
+| [Installation](./installation.md) | Getting a release binary or package, verifying it, `go install`, building from source, container images |
 | [`CHANGELOG.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/CHANGELOG.md) | Release history |
 
 ## Concepts & architecture
 
-| Page | What it covers |
-|------|----------------|
-| [Concepts & Architecture](./overview.md) | Terminology, where the plugin sits in the KMS v2 envelope scheme, deployment topologies (single node and HA), and key rotation |
+The plugin occupies exactly one step of the KMS v2 envelope scheme, and **never sees your `Secret`
+data** — only the 32-byte DEK seed that `kube-apiserver` asks it to wrap with the KEK held on the
+TPM or HSM. The apiserver derives the DEK and encrypts the object itself.
+
+→ **[Concepts & Architecture](./overview.md)** for the terminology, that flow drawn out, the
+deployment topologies (single node and HA across three servers), and how key rotation works.
 
 ## Cryptographic reference
 
-| Page | What it covers |
-|------|----------------|
-| [Cryptographic Schemes](./cryptographic-schemes.md) | What each `--algorithm-family` does to the data: keys used, primitives composed, wire format, and which operations run inside the HSM. Includes the ML-KEM / FIPS 203 envelope in detail |
+Four algorithm families, chosen with `--algorithm-family`. Key size and parameter set are **not**
+flags — they are read from the key on the token at runtime.
+
+| Family | What wraps the DEK seed | Output |
+|--------|-------------------------|--------|
+| `aes-gcm` | AES-GCM, 128/192/256-bit | JWE |
+| `aes-cbc` | AES-CBC with HMAC-SHA256 authentication | JWE |
+| `rsa-oaep` | RSA-OAEP (SHA-256), 2048/3072/4096-bit | JWE |
+| `ml-kem` | ML-KEM-512/768/1024 (FIPS 203) + AES-256-GCM | binary envelope **+ a `kem-ciphertext` annotation** |
+
+ML-KEM is the structural exception: a KEM produces two artefacts where JWE has one slot, and the KEM
+ciphertext alone exceeds the KMS v2 1 kB ciphertext limit at 768 and 1024. So the plugin splits them
+across the two fields KMS v2 already provides.
+
+→ **[Cryptographic Schemes](./cryptographic-schemes.md)** for what each family does to the data
+byte by byte, which operations stay inside the HSM, and the ML-KEM envelope in full.
 
 ## HSM & TPM guides
 
-How to set up a PKCS #11 provider and point `k8s-kms-plugin serve` at it.
+Every provider is reached through the same PKCS #11 interface, so the plugin configuration differs
+only in `--p11-lib`, the token label and which key you point at. One page each, in
+**[`hsm-guides/`](./hsm-guides/README.md)**; new devices are added there.
 
-| Guide | Notes |
-|-------|-------|
-| [SoftHSMv3 (`pqctoday-hsm`)](./softhsm-v3.md) | **Recommended** for dev & integration testing — supports all algorithm families, including ML-KEM |
-| [Thales eToken Fusion](./thales-etoken-fusion.md) | Hardware USB token |
-| [Yubico YubiHSM 2](./yubico-yubihsm2.md) | Hardware USB HSM |
-| [SoftHSMv2](./softhsm-v2.md) | Legacy reference — does not support ML-KEM |
-| [Software TPM Emulator](./software-tpm-emulator.md) | Legacy reference — does not support ML-KEM |
+Tested and documented so far:
 
-The matrix of which algorithm families have been *tested* on each device lives in the usage guide:
-[HSM & TPM Supported Platforms](./usage.md#hsm--tpm-supported-platforms).
+| Device | Type | Form factor | Algorithm families verified | Guide |
+|--------|------|-------------|-----------------------------|-------|
+| SoftHSMv3 (`pqctoday-hsm`) | HSM | Software | AES-GCM, AES-CBC+HMAC, RSA-OAEP, **ML-KEM** | [Guide](./hsm-guides/softhsm-v3.md) |
+| SoftHSMv2 | HSM | Software | none yet — no ML-KEM support | [Guide](./hsm-guides/softhsm-v2.md) |
+| Software TPM Emulator (`swtpm`) | TPM | Software | none yet — no ML-KEM support | [Guide](./hsm-guides/software-tpm-emulator.md) |
+| Thales eToken Fusion | HSM | Hardware USB | RSA-OAEP | [Guide](./hsm-guides/thales-etoken-fusion.md) |
+| Yubico YubiHSM 2 | HSM | Hardware USB | RSA-OAEP | [Guide](./hsm-guides/yubico-yubihsm2.md) |
+
+**SoftHSMv3 is the one to start with** — it is the only provider here that covers every algorithm
+family, and it needs no hardware.
+
+"Verified" means someone ran it and wrote it down. A blank is not a failure: the plugin reads the key
+size and parameter set from the token at runtime, so untested combinations are simply untested. The
+exact key sizes and ML-KEM parameter sets behind each entry are in
+[HSM & TPM Supported Platforms](./hsm-guides/README.md#hsm--tpm-supported-platforms), which is the
+authoritative matrix.
 
 ## Kubernetes integration guides
 
-How to make a cluster's `kube-apiserver` use a running `k8s-kms-plugin` as its KMS v2 provider.
+How to make a cluster's `kube-apiserver` encrypt Secrets through a running plugin. One page per
+distribution, in **[`kubernetes-guides/`](./kubernetes-guides/README.md)**.
 
-| Guide | Notes |
-|-------|-------|
-| [`KinD`](./kind-kubernetes.md) | **Recommended** for testing — single-node cluster on Podman or Docker, deleted in one command. Covers the two-hop socket mount, rootless Podman, and a troubleshooting table |
-| [`k3s`](./k3s-kubernetes.md) | Installs on the host. Also covers key rotation and HA (3 server nodes) |
+Tested and documented so far:
 
-Both guides use the reference [`EncryptionConfiguration`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml)
+| Distribution | Tested with | Runs where | Also covers | Guide |
+|--------------|-------------|------------|-------------|-------|
+| `KinD` — **recommended for testing** | `kind v0.32.0` (Kubernetes v1.36.1) | Podman or Docker container | Two-hop socket mount, rootless Podman, troubleshooting table | [Guide](./kubernetes-guides/kind-kubernetes.md) |
+| `k3s` | `v1.33.1+k3s1` | On the host | Key rotation with `serve rotation`, HA with three server nodes | [Guide](./kubernetes-guides/k3s-kubernetes.md) |
+
+Both require Kubernetes **v1.29 or newer** — the plugin serves only KMS v2, and KMS v1 is disabled by
+default from v1.29. Any distribution that supports KMS v2 and lets you pass
+`--encryption-provider-config` to the apiserver should work; these two are the ones exercised.
+
+Both use the reference [`EncryptionConfiguration`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/deployments/k8s/encryption-conf-kmsv2-unix-socket.yaml)
 from [`deployments/k8s/`](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/deployments/k8s/).
 
 ## CLI reference
@@ -94,14 +152,21 @@ from [`deployments/k8s/`](https://github.com/eclipse-keysealer/k8s-kms-plugin/tr
 
 _Auto generated_ files carry a footer such as `###### Auto generated by spf13/cobra on 31-Jul-2025`. Do not edit them
 by hand — regenerate with `make doc`. See
-[CLI Auto Generated Documentation](./usage.md#cli-auto-generated-documentation).
+[CLI Auto Generated Documentation](./cli-user-interface/README.md#cli-auto-generated-documentation).
 
 ## Development
 
-| Page | What it covers |
-|------|----------------|
-| [Development & Debugging](./development.md) | Repository layout, the three test suites and what each needs, building against `crypto11`/`gose` development branches, `delve` and `vscode` debugging |
-| [Supply Chain Security](./supply-chain-security.md) | Vulnerability scanning locally and in CI, release signing, and verifying artifacts, container images and SLSA provenance |
+Three test suites: unit tests need nothing, while the integration and end-to-end suites need a
+PKCS #11 module in `PKCS11_MODULE` — **without it they exit successfully without testing anything**,
+so a green run is not proof the PKCS #11 paths ran.
+
+→ **[Development & Debugging](./development.md)** for the repository layout, what each suite needs,
+building against `crypto11`/`gose` development branches, and `delve`/`vscode` debugging.
+
+→ **[Supply Chain Security](./supply-chain-security.md)** — the reference for signing and provenance:
+vulnerability scanning locally and in CI, what a release produces (Sigstore bundles, SBOMs, VEX,
+SLSA3 provenance for binaries and image), and the full verification commands. [Installation](./installation.md#verify-what-you-downloaded)
+has the short version if you only want to check a download.
 
 ## Helper tools & scripts
 

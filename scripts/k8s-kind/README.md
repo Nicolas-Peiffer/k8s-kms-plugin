@@ -5,7 +5,7 @@ The script in this directory prepares the local environment needed to run
 cluster (Podman or Docker).
 
 **Prerequisites**: `kind` and `kubectl` in your `PATH`, plus `podman` (≥ 3.0) or
-`docker`. See [`docs/kind-kubernetes.md`](../../docs/kind-kubernetes.md) for the
+`docker`. See [`docs/kind-kubernetes.md`](../../docs/kubernetes-guides/kind-kubernetes.md) for the
 full walkthrough and the troubleshooting table.
 
 ---
@@ -55,7 +55,7 @@ Everything is overridable via environment variables:
 
 The PKCS #11 defaults match the development token created by
 [`create-dev-token`](../../tools/create-dev-token/) — see
-[`docs/softhsm-v3.md`](../../docs/softhsm-v3.md).
+[`docs/softhsm-v3.md`](../../docs/hsm-guides/softhsm-v3.md).
 
 #### Typical session
 
