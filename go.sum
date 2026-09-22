@@ -8,12 +8,12 @@ github.com/cpuguy83/go-md2man/v2 v2.0.7/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6N
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
-github.com/eclipse-keypont/crypto11/v2 v2.0.0-rc4 h1:ifkyq2vZdclrOzqv2Ce3jazPcRukCsR5lImiKGdnGSQ=
-github.com/eclipse-keypont/crypto11/v2 v2.0.0-rc4/go.mod h1:dygTIYZIvRwpEsBB8zet3sVrs3bG72rP/lo2/TnRR58=
-github.com/eclipse-keypont/gose v1.0.0-rc6 h1:e7jPrgygY9qRLL4q6MUuSW1pRKWm65YiMzq3Yx5eLqo=
-github.com/eclipse-keypont/gose v1.0.0-rc6/go.mod h1:/zEe3DBgvMpWBZf1itF/Awi2nUh3zJ6zY7lAWBJU+Bs=
-github.com/eclipse-keypont/pkcs11-go v1.1.0 h1:z6XKCJ3EqtQY4atEca1j6PhXLyISzXhci4UTL8YZRTA=
-github.com/eclipse-keypont/pkcs11-go v1.1.0/go.mod h1:G7oHN2Ozg6EiiK1o3WPniTkZAO8QdH7J1r8oP897spc=
+github.com/eclipse-keypont/crypto11/v2 v2.0.0-rc5 h1:5HCQTK32q6j6mEhNPM1Bs2JcCUTf3xfzjQPT0J/Tjd4=
+github.com/eclipse-keypont/crypto11/v2 v2.0.0-rc5/go.mod h1:FlYkHH+Mjp07vvAIIXt37WgmbWEXJs3JkaP6hpip6AA=
+github.com/eclipse-keypont/gose v1.0.0-rc7 h1:Zay7ouO7UNt7KYcYyXviYvb6xOwlc8m7wNqiTZ5BFww=
+github.com/eclipse-keypont/gose v1.0.0-rc7/go.mod h1:7hyPklf0+7awHVx6EKXWLQNHCqS/dAzQHOqCJ0t81H0=
+github.com/eclipse-keypont/pkcs11-go v1.1.1 h1:H+iaklXAyxAKFgrFubPn96fOi0pLwOvzwkHaY52agAc=
+github.com/eclipse-keypont/pkcs11-go v1.1.1/go.mod h1:vKJUVbufxP1lbfjtCSTjtaQma9yNwshvasBOeF7KKPE=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
 github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
 github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=
@@ -66,8 +66,6 @@ github.com/mitchellh/reflectwalk v1.0.2/go.mod h1:mSTlrgnPZtwu0c4WaC2kGObEpuNDbx
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=
-github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
-github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/rogpeppe/go-internal v1.9.0/go.mod h1:WtVeX8xhTBvf0smdhujwtBcq4Qrzq/fJaraNFVN+nFs=
 github.com/rogpeppe/go-internal v1.16.0 h1:O9DK+vNMDVGLr2BeZqmpLeMjiMNkuXfcqntWbZV6S5g=
 github.com/rogpeppe/go-internal v1.16.0/go.mod h1:DrUVZyrJU+txYW5/1kwtXQSMFio52ZOxX7yM1VHvnxs=
