@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"time"
 
 	"github.com/eclipse-keypont/crypto11/v2"
@@ -138,15 +137,10 @@ Reference:
 			logging.Fatal("failed to initialize rotated provider for old KEK", "cobra_cmd", cmd.Use, "error", err)
 		}
 
-		_ = os.Remove(flagsServe.SocketPath)
+		// Same socket, same flag and same hardening as `serve`: see listenOnUnixSocket.
 		var grpcUNIX net.Listener
-		if grpcUNIX, err = net.Listen("unix", flagsServe.SocketPath); err != nil {
+		if grpcUNIX, err = listenOnUnixSocket(flagsServe.SocketPath); err != nil {
 			return
-		}
-		// Grant group read/write so a co-located client (e.g. kube-apiserver
-		// running under a shared gid) can connect to the socket.
-		if err := os.Chmod(flagsServe.SocketPath, 0775); err != nil { //nolint:gosec // group access is intentional, see comment above
-			slog.Error("error setting socket permissions", "path", flagsServe.SocketPath, "error", err)
 		}
 
 		if err = grpcRotation(grpcUNIX, p); err != nil {
