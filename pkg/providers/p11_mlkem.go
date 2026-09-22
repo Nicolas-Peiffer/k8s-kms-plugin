@@ -102,6 +102,23 @@ func getEncapsulation(req *k8skmsv2.DecryptRequest) (ct []byte, ok bool) {
 	return ct, ok
 }
 
+// destroySharedSecret releases the transient shared-secret key object that Encapsulate or
+// Decapsulate created on the token.
+//
+// Failing to destroy it is not worth failing the RPC over — the crypto has already
+// succeeded and the seed is wrapped — but it must not pass silently either: the objects
+// accumulate on the token for as long as the session lives, so the log line is how an
+// operator finds out before the token fills up.
+func destroySharedSecret(ss *crypto11.MLKEMSharedSecret, op, uid string) {
+	if ss == nil {
+		return
+	}
+	if err := ss.Delete(); err != nil {
+		slog.Warn("failed to destroy ML-KEM shared-secret object on the token; objects will accumulate until the session closes",
+			"op", op, "uid", uid, "error", err)
+	}
+}
+
 // mlkemSharedSecretTemplate returns the PKCS#11 attribute template used when deriving an
 // ML-KEM shared secret on the HSM: a transient (non-token) AES-256 session object with
 // CKA_EXTRACTABLE=true, so Bytes() can retrieve the raw shared secret for
@@ -140,6 +157,12 @@ func (p *P11) encryptMLKEM(ctx context.Context, req *k8skmsv2.EncryptRequest) (*
 		slog.Error("encryptMLKEM: encapsulation failed", "uid", req.GetUid(), "keyId", p.GetKekKeyIDString(), "error", err)
 		return nil, fmt.Errorf("encryptMLKEM: encapsulation failed: %w", err)
 	}
+	// Encapsulate creates a key object on the token. It is a session object
+	// (CKA_TOKEN=false in mlkemSharedSecretTemplate), so it would only be reclaimed when the
+	// session closes — and this plugin holds its session for the lifetime of the process, so
+	// one object would accumulate per Encrypt call until the token runs out of object slots.
+	// Destroy it here: the raw secret has already been copied out by Bytes() below.
+	defer destroySharedSecret(ss, "encryptMLKEM", req.GetUid())
 	sharedSecret, err := ss.Bytes()
 	if err != nil {
 		slog.Error("encryptMLKEM: failed to extract shared secret", "uid", req.GetUid(), "keyId", p.GetKekKeyIDString(), "error", err)
@@ -230,6 +253,8 @@ func (p *P11) decryptMLKEMWithContext(req *k8skmsv2.DecryptRequest, actualCtx *c
 		slog.Error("decryptMLKEM: decapsulation failed", "uid", req.GetUid(), "keyId", req.GetKeyId(), "error", err)
 		return nil, fmt.Errorf("decryptMLKEM: decapsulation failed: %w", err)
 	}
+	// Same session object as in encryptMLKEM, released for the same reason.
+	defer destroySharedSecret(ss, "decryptMLKEM", req.GetUid())
 	sharedSecret, err := ss.Bytes()
 	if err != nil {
 		slog.Error("decryptMLKEM: failed to extract shared secret", "uid", req.GetUid(), "keyId", req.GetKeyId(), "error", err)
