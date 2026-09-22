@@ -5,6 +5,57 @@ history see [GitHub Releases](https://github.com/eclipse-keysealer/k8s-kms-plugi
 
 ## Unreleased
 
+### Security
+
+Findings from an external security review of the plugin, triaged against the code rather than
+taken at face value. Each was confirmed present before being fixed; the Istio-rooted findings in
+the same review are not listed because the code they concern was already removed, and several
+others were verified to be false positives and left alone.
+
+- **The release pipeline installed syft and trivy by piping a script from a mutable branch into
+  a root shell.** `setup-build-env` ran
+  `curl -sSfL .../anchore/syft/main/install.sh | sudo sh` and the equivalent for trivy. Pinning
+  the tool versions gave no protection, because the script executes before it reads the version
+  argument. The step runs in the release job, which holds `contents: write`, `packages: write`,
+  `id-token: write` and `attestations: write`, so anyone controlling either upstream `main`
+  could have substituted every artefact the project ships and signed the result with its own
+  cosign identity and SLSA provenance. Both are now installed through their official actions,
+  pinned by commit SHA like every other action here, at the same tool versions as before.
+- **A failed AES-CBC setup stranded an active PKCS#11 operation.** The `defer blockMode.Close()`
+  that finalizes the operation was registered after the HMAC key lookup, while the CBC operation
+  is opened before it, so an HMAC key that was missing or of the wrong type returned without
+  finalizing. PKCS#11 permits one active operation per session, so the session was left
+  poisoned and every subsequent encrypt and decrypt on it failed with `CKR_OPERATION_ACTIVE` —
+  a configuration mistake turned into a plugin that stayed up and served nothing. Fixed on both
+  the encrypt and the decrypt path.
+- **ML-KEM leaked one HSM object per operation.** `Encapsulate` and `Decapsulate` create a
+  shared-secret key object on the token and neither destroyed it. The objects are session
+  objects, so they are reclaimed when the session closes — but the session lives as long as the
+  process, so in practice one accumulated per `Encrypt` and per `Decrypt` until the token ran
+  out of object slots. The Go-side copies were already wiped; this is the token-side
+  counterpart.
+- **The gRPC socket's permissions were applied after creation and ignored on failure.** The mode
+  was set with `os.Chmod` after `net.Listen`, which resolves the path a second time: anything
+  able to swap the socket for a symlink in between had `0775` applied to the symlink's target
+  instead, and the default socket lives under `$TMPDIR`. A failed chmod was logged and then
+  ignored, so the plugin went on to serve DEK unwrapping on a socket whose permissions nobody
+  had chosen. The socket is now created under a umask, so `bind(2)` sets the final mode itself
+  and the path is never resolved twice, and every failure is fatal. An **abstract socket**
+  (`--socket @name`) is now rejected outright: it lives in the network namespace rather than the
+  filesystem, so it has no owner and no mode, and every process in the namespace could connect
+  and ask the plugin to unwrap DEKs.
+- **gRPC server reflection was enabled in production.** It published the service schema to
+  anything that could open the socket. `kube-apiserver` is compiled against the KMS v2 protobuf
+  and the e2e suite passes `grpcurl -proto`, so nothing needed it.
+- **The gRPC server accepted its library defaults for every resource bound** — 4 MiB per received
+  message, unlimited sent, unlimited concurrent streams, no idle timeout. The largest legal
+  KMS v2 message is about 34 kB, so messages are now capped at 64 kB in both directions, with
+  concurrent streams, a connection timeout and a maximum idle time alongside.
+- **`build.sh --dev` passed its branch argument through `eval`**, so any shell metacharacter in
+  the value was executed. The `eval` bought nothing — `GOPROXY=direct` is an ordinary command
+  prefix and the module query is a single argument. All three `eval`s in the script are gone,
+  branch names are validated, and failures from `git switch` and `go get` now stop the build.
+
 ### Fixed
 
 - **`serve rotation` opened the old KEK's token for the active KEK too.** `initRotatedProvider`
