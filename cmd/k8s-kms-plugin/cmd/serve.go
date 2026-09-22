@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"reflect"
 	"time"
 
 	"github.com/eclipse-keypont/crypto11/v2"
@@ -27,7 +26,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 // ServeFlags holds the resolved values of the serve command flags. The koanf tags are the long
@@ -98,6 +99,31 @@ const (
 	maxCkaLabelBytes = 255
 	// maxUnixSocketPathLen is the Linux UNIX_PATH_MAX minus one byte for the null terminator.
 	maxUnixSocketPathLen = 107
+
+	// maxGRPCMsgSize caps a single gRPC message in BYTES, in both directions.
+	//
+	// gRPC's own default is 4 MiB received, and unlimited sent. Nothing this plugin speaks
+	// comes close: the largest legal KMS v2 message is a request carrying the 32 KiB
+	// annotations budget plus a 1 kB ciphertext and a 1 kB key ID, so roughly 34 KiB. 64 KiB
+	// leaves that comfortable headroom while refusing — before any of it is buffered — the
+	// multi-megabyte message a local process could otherwise make the plugin allocate.
+	//
+	// The interceptor's per-field checks stay where they are. They run after a message has
+	// been received and decoded, so they bound what is processed, not what is allocated.
+	maxGRPCMsgSize = 64 * 1024
+
+	// maxGRPCConcurrentStreams caps in-flight RPCs per connection. The only client is a
+	// co-located kube-apiserver issuing small, short unary calls, so this is generous; it
+	// exists to stop one client pinning the HSM session with unbounded concurrency.
+	maxGRPCConcurrentStreams = 64
+
+	// grpcMaxConnectionIdle closes a connection that has had no active RPC for this long, so
+	// a client that goes away without closing does not hold resources indefinitely. gRPC
+	// clients reconnect transparently, so this is invisible to a healthy apiserver.
+	grpcMaxConnectionIdle = 15 * time.Minute
+
+	// grpcConnectionTimeout bounds how long a connection may take to complete its setup.
+	grpcConnectionTimeout = 30 * time.Second
 )
 
 // sanitizeServeFlags validates all user-controlled fields in ServeFlags after koanf has
@@ -361,18 +387,46 @@ func initProvider() (p providers.Provider, err error) {
 	return
 }
 
-func grpcServe(gl net.Listener, p providers.Provider) (err error) {
-	slog.Log(context.Background(), logging.LevelTrace, "grpcServe")
-
-	// Create a gRPC server to host the services
+// newKMSGRPCServer builds the gRPC server that both `serve` and `serve rotation` run.
+//
+// The two commands register the same single service on the same kind of listener and differ
+// only in which provider they hand it, so they share one constructor: the resource bounds below
+// are a property of the KMS v2 protocol, not of either command, and duplicating them invites
+// the two copies to drift.
+//
+// Server reflection is deliberately not registered. It exists to let a generic client discover
+// the service schema at runtime, which is a debugging affordance rather than something
+// kube-apiserver uses — it is compiled against the KMS v2 protobuf. Leaving it on told any
+// local process that reached the socket exactly which methods to call. The e2e suite drives the
+// plugin with `grpcurl -proto`, passing the api.proto it resolves from k8s.io/kms, so it does
+// not depend on reflection either.
+func newKMSGRPCServer(p providers.Provider) *grpc.Server {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(p.UnaryInterceptor),
 		grpc.UnknownServiceHandler(unknownServiceHandler),
+		grpc.MaxRecvMsgSize(maxGRPCMsgSize),
+		grpc.MaxSendMsgSize(maxGRPCMsgSize),
+		grpc.MaxConcurrentStreams(maxGRPCConcurrentStreams),
+		grpc.ConnectionTimeout(grpcConnectionTimeout),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: grpcMaxConnectionIdle,
+		}),
 	}
-	gs := grpc.NewServer(serverOptions...)
 
+	// No keepalive.EnforcementPolicy: it terminates a connection whose client pings more often
+	// than the server permits, and the client here is a kube-apiserver whose ping cadence is
+	// not this plugin's to assume. Guessing it wrong would drop a working apiserver connection,
+	// which is a worse outcome than the ping traffic it would prevent.
+
+	gs := grpc.NewServer(serverOptions...)
 	k8skmsv2.RegisterKeyManagementServiceServer(gs, p)
-	reflection.Register(gs)
+	return gs
+}
+
+func grpcServe(gl net.Listener, p providers.Provider) (err error) {
+	slog.Log(context.Background(), logging.LevelTrace, "grpcServe")
+
+	gs := newKMSGRPCServer(p)
 
 	slog.Info("serving on socket", "address", gl.Addr().String())
 
@@ -384,8 +438,19 @@ START:
 	return
 }
 
-func unknownServiceHandler(srv interface{}, _ grpc.ServerStream) error {
-	typeOfSrv := reflect.TypeOf(srv)
-	slog.Info("unknown service handler", "type", typeOfSrv, "service", srv)
-	return nil
+// unknownServiceHandler answers a call to a service or method this plugin does not implement.
+//
+// It used to log the service object itself and return nil. Returning nil reported success for a
+// call that did nothing, leaving the caller to infer failure from an empty response, and logging
+// the object rendered the provider implementation — an internal structure — into the log at
+// Info. It now names the method that was attempted and answers with the status code gRPC
+// defines for it, so a misdirected client gets a real error and the log line carries only the
+// method string the client itself supplied.
+func unknownServiceHandler(_ interface{}, stream grpc.ServerStream) error {
+	method, ok := grpc.MethodFromServerStream(stream)
+	if !ok {
+		method = "unknown"
+	}
+	slog.Warn("rejected call to an unimplemented service or method", "method", method)
+	return status.Errorf(codes.Unimplemented, "unknown service or method: %s", method)
 }
