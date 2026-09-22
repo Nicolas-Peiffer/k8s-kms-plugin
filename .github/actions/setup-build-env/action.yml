@@ -90,16 +90,35 @@ runs:
 
     # -- Syft -----------------------------------------------------------------
     # Generates SPDX-JSON and CycloneDX-JSON SBOMs, invoked by goreleaser.
+    #
+    # Installed through the official action rather than `curl | sudo sh`. Both
+    # upstream installer scripts are served from a mutable `main` branch, so a
+    # compromise of either repository — or of raw.githubusercontent.com serving
+    # it — would run as root in the release job. That job holds contents:write,
+    # packages:write, id-token:write and attestations:write, so it can publish
+    # releases, push to GHCR and mint cosign keyless signatures and SLSA
+    # provenance: the blast radius is every artefact this project ships.
+    # Pinning the tool version does not help, because the script executes before
+    # the version argument is ever read.
+    #
+    # The action is pinned by commit SHA like every other action here, so
+    # Dependabot tracks it and the version comment stays reviewable. It places
+    # syft on PATH, which is what goreleaser's `cmd: syft` resolves.
     - name: Install Syft
-      shell: bash
-      run: |
-        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-          | sudo sh -s -- -b /usr/local/bin v1.45.1
+      # anchore/sbom-action v0.24.2
+      uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      with:
+        syft-version: v1.45.1
 
     # -- Trivy ----------------------------------------------------------------
     # Generates CycloneDX VEX SBOMs with live vulnerability data, invoked by goreleaser.
+    #
+    # Pinned by commit SHA for the reason given above Syft. setup-trivy runs the
+    # same contrib/install.sh this step used to curl, but checks it out at a
+    # pinned commit first and appends the binary directory to $GITHUB_PATH, so
+    # goreleaser's `cmd: trivy` still resolves.
     - name: Install Trivy
-      shell: bash
-      run: |
-        curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-          | sudo sh -s -- -b /usr/local/bin v0.71.0
+      # aquasecurity/setup-trivy v0.3.1
+      uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+      with:
+        version: v0.71.0
