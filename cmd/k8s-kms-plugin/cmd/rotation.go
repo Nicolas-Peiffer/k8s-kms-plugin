@@ -13,9 +13,6 @@ import (
 	"github.com/eclipse-keypont/crypto11/v2"
 	"github.com/eclipse-keypont/gose/jose"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
-	k8skmsv2 "k8s.io/kms/apis/v2"
 
 	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/logging"
 	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/providers"
@@ -274,15 +271,8 @@ func initRotatedProvider() (pRot providers.Provider, err error) {
 func grpcRotation(gl net.Listener, p providers.Provider) (err error) {
 	slog.Log(context.Background(), logging.LevelTrace, "grpcRotation")
 
-	// Create a gRPC server to host the services
-	serverOptions := []grpc.ServerOption{
-		grpc.UnaryInterceptor(p.UnaryInterceptor),
-		grpc.UnknownServiceHandler(unknownServiceHandler),
-	}
-	gs := grpc.NewServer(serverOptions...)
-
-	k8skmsv2.RegisterKeyManagementServiceServer(gs, p)
-	reflection.Register(gs)
+	// Same service, same bounds and same absence of reflection as `serve`: see newKMSGRPCServer.
+	gs := newKMSGRPCServer(p)
 
 	slog.Info("serving on socket", "address", gl.Addr().String())
 
