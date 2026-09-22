@@ -661,6 +661,11 @@ func (p *P11) decryptWithContext(req *k8skmsv2.DecryptRequest, isRotation bool) 
 			if blockMode, err = kek.NewCBCDecrypterCloser(iv); err != nil {
 				return nil, fmt.Errorf("error initializing block cipher: %w", err)
 			}
+			// !!! It is very important to finalize each PKCS11 operation.
+			// Deferred immediately, for the reason given in Encrypt: an error between here
+			// and the HMAC setup would otherwise strand an active C_DecryptInit on the
+			// session and poison every subsequent operation with CKR_OPERATION_ACTIVE.
+			defer blockMode.Close()
 
 			cbcKey := gose.NewAesCbcCryptor(blockMode, req.GetKeyId(), jose.AlgA256CBC)
 			// Initialize the hmac key for authentication
@@ -675,8 +680,6 @@ func (p *P11) decryptWithContext(req *k8skmsv2.DecryptRequest, isRotation bool) 
 			hmacKey := gose.NewHmacShaCryptor(actualHmacCkaLabel, hash)
 			// decryptor
 			decryptor = gose.NewJweDirectDecryptorBlock(cbcKey, hmacKey)
-			// !!! It is very important to finalize each PKCS11 operation
-			defer blockMode.Close()
 
 			if out, aad, err = decryptor.Decrypt(string(req.GetCiphertext())); err != nil {
 				slog.Error("error during decryption", "error", err)
@@ -815,6 +818,12 @@ func (p *P11) Encrypt(ctx context.Context, req *k8skmsv2.EncryptRequest) (resp *
 			if blockMode, err = kek.NewCBCEncrypterCloser(iv); err != nil {
 				return nil, fmt.Errorf("error initializing block cipher: %w", err)
 			}
+			// !!! It is very important to finalize each PKCS11 operation.
+			// Deferred immediately after the operation is opened, not after the HMAC key is
+			// set up: PKCS#11 allows one active operation per session, so any error return
+			// between the two would otherwise leave C_EncryptInit active and every later
+			// operation on this session would fail with CKR_OPERATION_ACTIVE.
+			defer blockMode.Close()
 			// jose.AlgA256CBC is the only standardized JWE AES-CBC key size (unlike AES-GCM
 			// which exists as AlgA128GCM / AlgA192GCM / AlgA256GCM). The key on the HSM must be 256-bit.
 			cbcKey := gose.NewAesCbcCryptor(blockMode, p.GetKekKeyIDString(), jose.AlgA256CBC)
@@ -831,8 +840,6 @@ func (p *P11) Encrypt(ctx context.Context, req *k8skmsv2.EncryptRequest) (resp *
 			hmacKey := gose.NewHmacShaCryptor(p.hmacCkaLabel, hash)
 			// encryptor
 			encryptor = gose.NewJweDirectEncryptorBlock(cbcKey, hmacKey, iv)
-			// !!! It is very important to finalize each PKCS11 operation
-			defer blockMode.Close()
 			// output is the marshalled jwe
 			if out, err = encryptor.Encrypt(req.GetPlaintext(), nil); err != nil {
 				slog.Error("Encrypt: encryption failed", "error", err)
