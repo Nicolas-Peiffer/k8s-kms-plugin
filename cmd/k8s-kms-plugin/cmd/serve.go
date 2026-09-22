@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/eclipse-keypont/crypto11/v2"
@@ -98,6 +100,15 @@ const (
 	maxCkaLabelBytes = 255
 	// maxUnixSocketPathLen is the Linux UNIX_PATH_MAX minus one byte for the null terminator.
 	maxUnixSocketPathLen = 107
+
+	// socketPerm is the mode the gRPC unix socket is created with. Connecting to a unix
+	// socket requires write permission, so 0775 lets the owner and the group connect — a
+	// co-located client such as a kube-apiserver running under a shared gid — and nobody
+	// else. The read and execute bits granted to others convey no ability to connect.
+	socketPerm = 0o775
+
+	// socketUmask is the complement of socketPerm within the 0777 a socket is created with.
+	socketUmask = 0o777 &^ socketPerm
 )
 
 // sanitizeServeFlags validates all user-controlled fields in ServeFlags after koanf has
@@ -118,7 +129,69 @@ func sanitizeServeFlags(f *ServeFlags) error {
 	if len(f.SocketPath) > maxUnixSocketPathLen {
 		return fmt.Errorf("--socket: path length %d exceeds Unix socket maximum of %d bytes", len(f.SocketPath), maxUnixSocketPathLen)
 	}
+	if f.SocketPath == "" {
+		return fmt.Errorf("--socket: path is empty")
+	}
+	// A leading "@" or NUL makes this an abstract socket. An abstract socket lives in the
+	// network namespace instead of the filesystem, so it has no owner and no mode: every
+	// process in the namespace may connect and ask the plugin to unwrap DEKs, and there is
+	// no permission to set that would prevent it. Reject it rather than serve one.
+	if strings.HasPrefix(f.SocketPath, "@") || strings.HasPrefix(f.SocketPath, "\x00") {
+		return fmt.Errorf("--socket: %q is an abstract socket; abstract sockets have no filesystem permissions "+
+			"and cannot be access-controlled, so a filesystem path is required", f.SocketPath)
+	}
 	return nil
+}
+
+// listenOnUnixSocket creates the gRPC listener, with the socket's final permissions already in
+// place.
+//
+// The mode is applied through the umask rather than by calling os.Chmod after net.Listen.
+// A chmod resolves the path a second time, so anything able to swap the socket for a symlink in
+// between — a world-writable parent directory such as the default under $TMPDIR is enough —
+// has the mode applied to the symlink's target instead. Creating the socket under a umask
+// closes that window: bind(2) sets the final mode itself and the path is never resolved twice.
+//
+// Every failure here is returned rather than logged. The previous code logged a failed chmod and
+// carried on, which meant a socket whose permissions nobody had chosen still went on to serve
+// unwrap requests.
+func listenOnUnixSocket(socketPath string) (net.Listener, error) {
+	// Clear a socket left behind by a previous run, but only a socket: anything else at that
+	// path was not put there by this plugin, and unlinking it is exactly the arbitrary-file
+	// removal this function is meant to avoid.
+	if fi, err := os.Lstat(socketPath); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("refusing to remove %s: it is not a socket (mode %s)", socketPath, fi.Mode())
+		}
+		if err := os.Remove(socketPath); err != nil {
+			return nil, fmt.Errorf("removing stale socket %s: %w", socketPath, err)
+		}
+	}
+
+	// syscall.Umask is process-wide, so it is held for exactly the one call that needs it.
+	// Startup is single-threaded with respect to file creation here, and no goroutine this
+	// process starts creates files.
+	oldMask := syscall.Umask(socketUmask)
+	l, err := net.Listen("unix", socketPath)
+	syscall.Umask(oldMask)
+	if err != nil {
+		return nil, fmt.Errorf("listening on unix socket %s: %w", socketPath, err)
+	}
+
+	// Confirm what actually reached the filesystem. A umask constrains the mode but a
+	// filesystem is free to widen it (a default ACL, for instance), and this socket is the
+	// only thing standing between a local process and DEK unwrapping. Only extra bits are
+	// an error: a stricter mode is the operator's own umask and takes nothing away.
+	if fi, err := os.Lstat(socketPath); err == nil {
+		if extra := fi.Mode().Perm() &^ os.FileMode(socketPerm); extra != 0 {
+			_ = l.Close()
+			_ = os.Remove(socketPath)
+			return nil, fmt.Errorf("socket %s was created with mode %#o, which grants more than the intended %#o; refusing to serve",
+				socketPath, fi.Mode().Perm(), socketPerm)
+		}
+	}
+
+	return l, nil
 }
 
 // serveCmd represents the serve command
@@ -206,15 +279,9 @@ Reference:
 			logging.Fatal("failed to initialize provider", "cobra_cmd", cmd.Use, "error", err)
 		}
 
-		_ = os.Remove(flagsServe.SocketPath)
 		var grpcUNIX net.Listener
-		if grpcUNIX, err = net.Listen("unix", flagsServe.SocketPath); err != nil {
+		if grpcUNIX, err = listenOnUnixSocket(flagsServe.SocketPath); err != nil {
 			return
-		}
-		// Grant group read/write so a co-located client (e.g. kube-apiserver
-		// running under a shared gid) can connect to the socket.
-		if chmodErr := os.Chmod(flagsServe.SocketPath, 0775); chmodErr != nil { //nolint:gosec // group access is intentional, see comment above
-			slog.Error("error setting socket permissions", "path", flagsServe.SocketPath, "error", chmodErr)
 		}
 
 		if err = grpcServe(grpcUNIX, p); err != nil {

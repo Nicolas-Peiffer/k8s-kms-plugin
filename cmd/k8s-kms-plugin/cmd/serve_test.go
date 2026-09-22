@@ -4,10 +4,13 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestAlgorithmFamily_Set_Valid verifies that every documented slug is accepted.
@@ -93,7 +96,9 @@ func TestValidateAlgorithmFamily(t *testing.T) {
 // without error.
 func TestSanitizeServeFlags_Valid(t *testing.T) {
 	for _, v := range []string{"aes-gcm", "aes-cbc", "rsa-oaep", "ml-kem"} {
-		f := &ServeFlags{AlgorithmFamily: v}
+		// SocketPath is set because the flag always carries a default in real use, and
+		// sanitizeServeFlags rejects an empty one.
+		f := &ServeFlags{AlgorithmFamily: v, SocketPath: "/run/k8s-kms-plugin.sock"}
 		assert.NoErrorf(t, sanitizeServeFlags(f), "sanitize should accept %q", v)
 	}
 }
@@ -122,6 +127,7 @@ func TestSanitizeServeFlags_Empty(t *testing.T) {
 func TestSanitizeServeFlags_LabelLimits(t *testing.T) {
 	atLimit := strings.Repeat("a", maxCkaLabelBytes)
 	overLimit := strings.Repeat("a", maxCkaLabelBytes+1)
+	const validSocket = "/run/k8s-kms-plugin.sock"
 
 	cases := []struct {
 		name    string
@@ -130,22 +136,22 @@ func TestSanitizeServeFlags_LabelLimits(t *testing.T) {
 	}{
 		{
 			"all labels at limit",
-			ServeFlags{AlgorithmFamily: "aes-gcm", P11Label: atLimit, DekKeyLabel: atLimit, HmacKeyLabel: atLimit},
+			ServeFlags{AlgorithmFamily: "aes-gcm", SocketPath: validSocket, P11Label: atLimit, DekKeyLabel: atLimit, HmacKeyLabel: atLimit},
 			"",
 		},
 		{
 			"p11-label over limit",
-			ServeFlags{AlgorithmFamily: "aes-gcm", P11Label: overLimit},
+			ServeFlags{AlgorithmFamily: "aes-gcm", SocketPath: validSocket, P11Label: overLimit},
 			"--p11-label",
 		},
 		{
 			"p11-key-label over limit",
-			ServeFlags{AlgorithmFamily: "aes-gcm", DekKeyLabel: overLimit},
+			ServeFlags{AlgorithmFamily: "aes-gcm", SocketPath: validSocket, DekKeyLabel: overLimit},
 			"--p11-key-label",
 		},
 		{
 			"p11-hmac-label over limit",
-			ServeFlags{AlgorithmFamily: "aes-gcm", HmacKeyLabel: overLimit},
+			ServeFlags{AlgorithmFamily: "aes-gcm", SocketPath: validSocket, HmacKeyLabel: overLimit},
 			"--p11-hmac-label",
 		},
 	}
@@ -195,4 +201,91 @@ func TestSanitizeServeFlags_SocketPathLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSanitizeServeFlags_RejectsAbstractSocket pins the rejection of abstract unix sockets.
+//
+// An abstract socket (a name starting with "@" or NUL) lives in the network namespace, not the
+// filesystem, so it has no owner and no mode: nothing can stop any process in the namespace
+// connecting and asking the plugin to unwrap DEKs. listenOnUnixSocket's permission handling is
+// meaningless for one, so the only defence is to refuse the flag value outright.
+func TestSanitizeServeFlags_RejectsAbstractSocket(t *testing.T) {
+	cases := []struct {
+		name    string
+		socket  string
+		wantErr string
+	}{
+		{"at sign prefix", "@k8s-kms-plugin", "abstract socket"},
+		{"nul prefix", "\x00k8s-kms-plugin", "abstract socket"},
+		{"empty", "", "path is empty"},
+		{"filesystem path is accepted", "/run/k8s-kms-plugin.sock", ""},
+		{"at sign elsewhere is accepted", "/run/user@1000/plugin.sock", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := ServeFlags{AlgorithmFamily: "aes-gcm", SocketPath: tc.socket}
+			err := sanitizeServeFlags(&flags)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestListenOnUnixSocket_CreatesSocketWithIntendedMode verifies that the socket reaches the
+// filesystem already carrying socketPerm.
+//
+// The mode has to be right at creation rather than set afterwards: a chmod resolves the path a
+// second time and can be redirected through a symlink. Asserting the mode on the created socket
+// is what catches a regression back to the chmod form, since both produce a working socket.
+func TestListenOnUnixSocket_CreatesSocketWithIntendedMode(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "plugin.sock")
+
+	l, err := listenOnUnixSocket(sock)
+	require.NoError(t, err)
+	defer func() { _ = l.Close() }()
+
+	fi, err := os.Lstat(sock)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(socketPerm), fi.Mode().Perm(),
+		"socket must be created with socketPerm, not chmod-ed afterwards")
+	assert.NotZero(t, fi.Mode()&os.ModeSocket, "path must be a socket")
+}
+
+// TestListenOnUnixSocket_ReplacesStaleSocket covers the restart case: a socket left by a
+// previous run is removed rather than causing "address already in use".
+func TestListenOnUnixSocket_ReplacesStaleSocket(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "plugin.sock")
+
+	first, err := listenOnUnixSocket(sock)
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	second, err := listenOnUnixSocket(sock)
+	require.NoError(t, err, "a socket left behind by a previous run must be replaced")
+	defer func() { _ = second.Close() }()
+}
+
+// TestListenOnUnixSocket_RefusesToRemoveNonSocket pins the guard on the unlink.
+//
+// The path comes from a flag, an environment variable or a config file, so pointing it at a
+// regular file is an ordinary mistake. Unlinking whatever happens to be there would make that
+// mistake destructive, so anything that is not a socket is left alone and reported.
+func TestListenOnUnixSocket_RefusesToRemoveNonSocket(t *testing.T) {
+	victim := filepath.Join(t.TempDir(), "important.conf")
+	require.NoError(t, os.WriteFile(victim, []byte("do not delete"), 0o600))
+
+	l, err := listenOnUnixSocket(victim)
+	require.Error(t, err)
+	if l != nil {
+		_ = l.Close()
+	}
+	assert.Contains(t, err.Error(), "not a socket")
+
+	content, readErr := os.ReadFile(victim)
+	require.NoError(t, readErr, "the file must still exist")
+	assert.Equal(t, "do not delete", string(content), "the file must be untouched")
 }
