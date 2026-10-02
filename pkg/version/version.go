@@ -1,20 +1,18 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
+// Package version exposes k8s-kms-plugin build metadata populated at compile
+// time via Go LDFLAGS (git describe, commit, build date, etc.) and formats it
+// for CLI and logging output.
 package version
 
 import (
 	"encoding/json"
 	"fmt"
 
+	"log/slog"
+
 	go_version "github.com/hashicorp/go-version"
-	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
 
@@ -22,28 +20,28 @@ import (
 var (
 	RawGitDescribe     string
 	GitDirtyStr        string // "true" or "false" but as strings as they are retrieved from git bash
-	GitCommitIdShort   string
-	GitCommitIdLong    string
+	GitCommitIDShort   string
+	GitCommitIDLong    string
 	GitCommitTimestamp string
 	GoVersion          string
 	BuildPlatform      string
 	BuildDate          string
 )
 
-// VersionDetails represents the JSON & YAML output structure.
-type VersionDetails struct {
-	VersionData VersionData `json:"k8s-kms-plugin" yaml:"k8s-kms-plugin"`
+// Details represents the JSON & YAML output structure.
+type Details struct {
+	VersionData Data `json:"k8s-kms-plugin" yaml:"k8s-kms-plugin"`
 }
 
-// VersionData holds structured versioning details.
-type VersionData struct {
+// Data holds structured versioning details.
+type Data struct {
 	Major              uint64 `json:"major" yaml:"major"`
 	Minor              uint64 `json:"minor" yaml:"minor"`
 	Patch              uint64 `json:"patch" yaml:"patch"`
 	Version            string `json:"version" yaml:"version"` // raw git describe
 	IsGitDirty         bool   `json:"isGitDirty" yaml:"isGitDirty"`
-	GitCommitIdLong    string `json:"gitCommitIdLong" yaml:"gitCommitIdLong"`
-	GitCommitIdShort   string `json:"gitCommitIdShort" yaml:"gitCommitIdShort"`
+	GitCommitIDLong    string `json:"gitCommitIdLong" yaml:"gitCommitIdLong"`
+	GitCommitIDShort   string `json:"gitCommitIdShort" yaml:"gitCommitIdShort"`
 	GitCommitTimestamp string `json:"gitCommitTimestamp" yaml:"gitCommitTimestamp"`
 	GoVersion          string `json:"goVersion" yaml:"goVersion"`
 	BuildDate          string `json:"buildDate" yaml:"buildDate"`
@@ -66,18 +64,21 @@ func IsDirty(isDirtyStr string) (bool, error) {
 	case "false":
 		return false, nil
 	default:
-		logrus.WithField("GitDirtyStr", isDirtyStr).Warn("Unexpected Git dirty string, assuming clean")
+		slog.Warn("Unexpected Git dirty string, assuming clean", "GitDirtyStr", isDirtyStr)
 		return false, fmt.Errorf("invalid dirty information: %s", GitDirtyStr)
 	}
 }
 
+// NewVersionData assembles a Data from the LDFLAGS-populated build metadata
+// variables. If RawGitDescribe is not a parsable semantic version (e.g. a
+// plain commit hash on an untagged checkout), Major/Minor/Patch are left
 // unset (zero v0.0.0).
-func NewVersionData() (VersionData, error) {
-	// this is a minimal content of the VersionData information
-	versionData := VersionData{
+func NewVersionData() (Data, error) {
+	// this is a minimal content of the Data information
+	versionData := Data{
 		Version:            RawGitDescribe,
-		GitCommitIdLong:    GitCommitIdLong,
-		GitCommitIdShort:   GitCommitIdShort,
+		GitCommitIDLong:    GitCommitIDLong,
+		GitCommitIDShort:   GitCommitIDShort,
 		GitCommitTimestamp: GitCommitTimestamp,
 		GoVersion:          GoVersion,
 		BuildDate:          BuildDate,
@@ -88,17 +89,14 @@ func NewVersionData() (VersionData, error) {
 	isDirty, err := IsDirty(GitDirtyStr)
 	if err != nil {
 		// only do a warning, do not return an error
-		logrus.WithError(err).Warning("Failed to parse Git dirty status")
+		slog.Warn("Failed to parse Git dirty status", "error", err)
 	}
 	versionData.IsGitDirty = isDirty
 
 	// Check if RawGitDescribe is a valid semantic version or a commit hash
 	version, err := go_version.NewSemver(RawGitDescribe)
 	if err != nil {
-		logrus.WithFields(logrus.Fields{
-			"raw_git_describe": RawGitDescribe,
-			"error":            err,
-		}).Debug("Invalid semantic versioning, falling back to snapshot version")
+		slog.Debug("Invalid semantic versioning, falling back to snapshot version", "raw_git_describe", RawGitDescribe, "error", err)
 		return versionData, nil
 	}
 
@@ -119,17 +117,17 @@ func NewVersionData() (VersionData, error) {
 	return versionData, nil
 }
 
-// NewVersionDetails creates a new VersionDetails object using NewVersionData.
-func NewVersionDetails() (VersionDetails, error) {
+// NewVersionDetails creates a new Details object using NewVersionData.
+func NewVersionDetails() (Details, error) {
 	versionData, err := NewVersionData()
 	if err != nil {
-		return VersionDetails{}, err
+		return Details{}, err
 	}
-	return VersionDetails{VersionData: versionData}, nil
+	return Details{VersionData: versionData}, nil
 }
 
-// returnJsonVersion returns the version as a JSON object.
-func returnJsonVersion(prettyPrint bool) ([]byte, error) {
+// returnJSONVersion returns the version as a JSON object.
+func returnJSONVersion(prettyPrint bool) ([]byte, error) {
 	versionDetails, err := NewVersionDetails()
 	if err != nil {
 		return nil, err
@@ -150,53 +148,53 @@ func returnYamlVersion() ([]byte, error) {
 
 	yamlData, err := yaml.Marshal(versionDetails)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to marshal YAML")
+		slog.Error("Failed to marshal YAML", "error", err)
 		return nil, err
 	}
 	return yamlData, nil
 }
 
-// LogrusOutputVersion logs the version details at server startup. For server logging.
-func LogrusOutputVersion() {
+// LogVersion logs the version details at server startup.
+func LogVersion() {
 	versionData, err := NewVersionData()
 	if err != nil {
-		logrus.WithError(err).Error("Failed to fetch version data")
+		slog.Error("Failed to fetch version data", "error", err)
 		return
 	}
 
-	logrus.Infof("k8s-kms-plugin version: %s", versionData.Version)
-	logrus.WithFields(logrus.Fields{
-		"build-date":       versionData.BuildDate,
-		"build-platform":   versionData.BuildPlatform,
-		"commit":           versionData.GitCommitIdLong,
-		"go-version":       versionData.GoVersion,
-		"raw-git-describe": versionData.Version,
-		"is-git-dirty":     versionData.IsGitDirty,
-		"short-commit":     versionData.GitCommitIdShort,
-	}).Debug("k8s-kms-plugin version details")
+	slog.Info(fmt.Sprintf("k8s-kms-plugin version: %s", versionData.Version))
+	slog.Debug("k8s-kms-plugin version details",
+		"build-date", versionData.BuildDate,
+		"build-platform", versionData.BuildPlatform,
+		"commit", versionData.GitCommitIDLong,
+		"go-version", versionData.GoVersion,
+		"raw-git-describe", versionData.Version,
+		"is-git-dirty", versionData.IsGitDirty,
+		"short-commit", versionData.GitCommitIDShort,
+	)
 }
 
-// VersionOutputToString returns the version as a formatted string.
-func VersionOutputToString(outputFormat string, prettyPrint bool) string {
+// OutputToString returns the version as a formatted string.
+func OutputToString(outputFormat string, prettyPrint bool) string {
 	switch outputFormat {
 	case "json":
-		data, err := returnJsonVersion(prettyPrint)
+		data, err := returnJSONVersion(prettyPrint)
 		if err != nil {
-			logrus.WithError(err).Error("Failed to generate JSON version output")
+			slog.Error("Failed to generate JSON version output", "error", err)
 			return "Error generating JSON output"
 		}
 		return string(data)
 	case "yaml":
 		data, err := returnYamlVersion()
 		if err != nil {
-			logrus.WithError(err).Error("Failed to generate YAML version output")
+			slog.Error("Failed to generate YAML version output", "error", err)
 			return "Error generating YAML output"
 		}
 		return string(data)
 	default:
 		version, err := go_version.NewSemver(RawGitDescribe)
 		if err != nil {
-			logrus.WithError(err).Debug("Invalid semantic versioning, falling back to snapshot version")
+			slog.Debug("Invalid semantic versioning, falling back to snapshot version", "error", err)
 			return fmt.Sprintf("k8s-kms-plugin: (snapshot) %s", RawGitDescribe)
 		}
 

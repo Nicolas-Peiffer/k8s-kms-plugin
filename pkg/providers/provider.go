@@ -1,40 +1,27 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
+// Package providers implements Kubernetes KMS v2 backends for k8s-kms-plugin,
+// including the PKCS#11/HSM-backed Provider in p11.go.
 package providers
 
 import (
 	"context"
-	"errors"
 
-	"github.com/ThalesGroup/gose/jose"
+	"github.com/eclipse-keypont/gose/jose"
 	"google.golang.org/grpc"
 
-	istio "github.com/ThalesGroup/k8s-kms-plugin/apis/istio/v1"
 	k8skmsv2 "k8s.io/kms/apis/v2"
 )
 
 var (
-	kekKeyOps     = []jose.KeyOps{jose.KeyOpsDecrypt, jose.KeyOpsEncrypt}
-	dekKeyOps     = []jose.KeyOps{jose.KeyOpsDecrypt, jose.KeyOpsEncrypt}
-	sKeyKeyOps    = []jose.KeyOps{jose.KeyOpsSign, jose.KeyOpsVerify}
-	ErrNoSuchKey  = errors.New("no such key")
-	ErrNoSuchCert = errors.New("no such cert")
+	kekKeyOps = []jose.KeyOps{jose.KeyOpsDecrypt, jose.KeyOpsEncrypt}
 )
 
-type Config struct {
-	CaKid  []byte
-	KekKid []byte
-}
+// Provider is a Kubernetes KMS v2 backend (e.g. PKCS#11/HSM) that serves
+// EncryptRequest/DecryptRequest/StatusRequest and can be wired into a gRPC
+// server via UnaryInterceptor.
 type Provider interface {
 	k8skmsv2.KeyManagementServiceServer
-	istio.KeyManagementServiceServer
-	// Ad
 	UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error)
 }

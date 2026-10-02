@@ -1,15 +1,10 @@
-/*
- * Copyright 2025 Thales Group
- * SPDX-License-Identifier: MIT
- *
- * Use of this source code is governed by an MIT-style
- * license that can be found in the LICENSE file or at
- * https://opensource.org/licenses/MIT.
- */
+// SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
+// SPDX-License-Identifier: MIT
 
+// Package main is the entry point for the k8s-kms-plugin binary.
 package main
 
-import "github.com/ThalesGroup/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd"
+import "github.com/eclipse-keysealer/k8s-kms-plugin/cmd/k8s-kms-plugin/cmd"
 
 func main() {
 	cmd.Execute()
