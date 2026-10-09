@@ -27,6 +27,21 @@ fork with nothing to remember. Leave it alone; override it locally with
 If you develop the site on a fork and want its badges to track your own Pages deployment, change
 them in your branch but switch them back before opening a pull request here.
 
+#### Fork-local values in this fork
+
+This repository is the `Nicolas-Peiffer` **fork**, used as a playground before work lands upstream at
+`eclipse-keysealer/k8s-kms-plugin`; it syncs *from* upstream rather than being the source of truth.
+It deliberately carries the exception above — grep for `FORK-LOCAL`, and for `nicolas-peiffer`, to
+find every value to switch back before a pull request upstream:
+
+| Where | Value | Switch to |
+|-------|-------|-----------|
+| `README.md` — documentation badge + Docs workflow badge | `nicolas-peiffer.github.io/…`, `github.com/Nicolas-Peiffer/…` | the `eclipse-keysealer` equivalents |
+| `README.md` — "Browse it online" and glossary links in the Documentation section | `nicolas-peiffer.github.io/…` | `eclipse-keysealer.github.io/…` |
+
+When syncing from upstream, these are the only intended differences: every other conflict resolves
+to upstream's version, and this section itself is fork-local too.
+
 ### Release artefact names in the documentation
 
 Any command in the docs that downloads, installs or verifies a release artefact must use the **real
