@@ -63,8 +63,11 @@ throwaway Kubernetes cluster:
 1. [SoftHSMv3 (`pqctoday-hsm`) & `k8s-kms-plugin`](./docs/hsm-guides/softhsm-v3.md) — **recommended** HSM: supports all algorithm families including ML-KEM
 2. [`KinD` & `k8s-kms-plugin`](./docs/kubernetes-guides/kind-kubernetes.md) — **recommended** cluster: single-node Kubernetes on Podman or Docker, deleted in one command
 
+The [Quick start](./docs/quick-start.md) page has the same two steps and where to go once they work. To
+*understand* the plugin before trying it, get started with [Concepts & Architecture](./docs/overview.md) instead.
+
 Other HSMs and TPMs (Thales eToken Fusion, YubiHSM 2, SoftHSMv2, TPM emulator), and the other
-Kubernetes distribution guide (`k3s`), are indexed in [`docs/README.md`](./docs/README.md).
+Kubernetes distribution guide (`k3s`), are listed in the [documentation index](./docs/README.md).
 
 # Documentation 📚
 

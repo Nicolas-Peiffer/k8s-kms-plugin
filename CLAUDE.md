@@ -184,7 +184,7 @@ documentation pages stay relative. `docs/README.md` states both rules.
 families, Quick Start, a documentation map, contributing, licence. Don't grow it back; add or extend a
 docs page and link it from the map.
 
-The manual lives in `docs/`, as five top-level pages — `overview.md`, `installation.md`,
+The manual lives in `docs/`, as six top-level pages — `overview.md`, `quick-start.md`, `installation.md`,
 `cryptographic-schemes.md`, `development.md`, `supply-chain-security.md` — plus `glossary.md` and four
 sections, each with a `README.md` index that is mounted as the section landing page:
 
@@ -194,6 +194,17 @@ sections, each with a `README.md` index that is mounted as the section landing p
 | `kubernetes-guides/` | 60 | `KinD` and `k3s`. Neither is presented as the default choice |
 | `tools-and-scripts/` | 65 | Documentation for `tools/create-dev-token/`, `scripts/grpcurl/` and `scripts/k8s-kind/`; those directories keep a short README pointing here |
 | `cli-user-interface/` | 90 | Hand-written CLI notes plus the generated `markdown/` and `txt/` trees |
+
+**Getting started and Quick start are two different entry points; keep them apart.** *Getting started*
+means understanding the plugin, and leads to `overview.md` (Concepts & Architecture, weight 10) — that is
+where the site's "Get started" button points. *Quick start* means trying it hands-on with no hardware,
+and is `quick-start.md` (weight 15): SoftHSMv3, then `KinD`, in that order. Don't label a quick-start
+link "Get started" or the reverse.
+
+`docs/README.md` is the **Documentation index** (`linkTitle: "Documentation"`, so breadcrumbs stay
+short). It is the docs section's own page, which Hextra's sidebar tree never lists, so it appears at the
+*bottom* of the sidebar through a `[[menu.sidebar]]` entry in `website/hugo.toml` — deliberately below
+the pages readers should meet first.
 
 There is no `usage.md`: it was dissolved into `cli-user-interface/` and the guides. A new subdirectory
 needs its own `_index.md` mount in `website/hugo.toml`.

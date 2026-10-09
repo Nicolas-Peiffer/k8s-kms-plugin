@@ -27,7 +27,7 @@ layout: hextra-home
 </div>
 
 <div class="hx:mb-6">
-{{< hextra/hero-button text="Get started" link="docs/" >}}
+{{< hextra/hero-button text="Get started" link="docs/overview/" >}}
 </div>
 
 <div class="hx:mt-6"></div>
@@ -54,9 +54,9 @@ layout: hextra-home
     link="docs/supply-chain-security/"
   >}}
   {{< hextra/feature-card
-    title="Try it in minutes"
-    subtitle="A software HSM and a throwaway KinD cluster, deleted in one command. No hardware needed to see the whole path end to end."
-    link="docs/hsm-guides/softhsm-v3/"
+    title="Quick start, in minutes"
+    subtitle="A SoftHSMv3 software HSM, then a throwaway KinD cluster deleted in one command. No hardware needed to see the whole path end to end."
+    link="docs/quick-start/"
   >}}
   {{< hextra/feature-card
     title="Runs where your cluster runs"
