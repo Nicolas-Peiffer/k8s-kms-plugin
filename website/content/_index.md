@@ -3,10 +3,16 @@ title: "k8s-kms-plugin"
 layout: hextra-home
 ---
 
+<div class="hx:flex hx:flex-wrap hx:gap-2">
 {{< hextra/hero-badge link="https://projects.eclipse.org/projects/technology.keysealer" >}}
   <span>Part of Eclipse KeySealer</span>
   {{< icon name="arrow-circle-right" attributes="height=14" >}}
 {{< /hextra/hero-badge >}}
+{{< hextra/hero-badge link="https://projects.eclipse.org/projects/technology.keypont" >}}
+  <span>Relying on Eclipse Keypont</span>
+  {{< icon name="arrow-circle-right" attributes="height=14" >}}
+{{< /hextra/hero-badge >}}
+</div>
 
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
