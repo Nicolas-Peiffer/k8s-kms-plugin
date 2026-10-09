@@ -3,6 +3,190 @@
 All notable changes to k8s-kms-plugin are documented in this file. For the full commit-level
 history see [GitHub Releases](https://github.com/eclipse-keysealer/k8s-kms-plugin/releases).
 
+## Unreleased
+
+### Security
+
+Findings from an external security review of the plugin, triaged against the code rather than
+taken at face value. Each was confirmed present before being fixed; the Istio-rooted findings in
+the same review are not listed because the code they concern was already removed, and several
+others were verified to be false positives and left alone.
+
+- **The release pipeline installed syft and trivy by piping a script from a mutable branch into
+  a root shell.** `setup-build-env` ran
+  `curl -sSfL .../anchore/syft/main/install.sh | sudo sh` and the equivalent for trivy. Pinning
+  the tool versions gave no protection, because the script executes before it reads the version
+  argument. The step runs in the release job, which holds `contents: write`, `packages: write`,
+  `id-token: write` and `attestations: write`, so anyone controlling either upstream `main`
+  could have substituted every artefact the project ships and signed the result with its own
+  cosign identity and SLSA provenance. Both are now installed through their official actions,
+  pinned by commit SHA like every other action here, at the same tool versions as before.
+- **A failed AES-CBC setup stranded an active PKCS#11 operation.** The `defer blockMode.Close()`
+  that finalizes the operation was registered after the HMAC key lookup, while the CBC operation
+  is opened before it, so an HMAC key that was missing or of the wrong type returned without
+  finalizing. PKCS#11 permits one active operation per session, so the session was left
+  poisoned and every subsequent encrypt and decrypt on it failed with `CKR_OPERATION_ACTIVE` —
+  a configuration mistake turned into a plugin that stayed up and served nothing. Fixed on both
+  the encrypt and the decrypt path.
+- **ML-KEM leaked one HSM object per operation.** `Encapsulate` and `Decapsulate` create a
+  shared-secret key object on the token and neither destroyed it. The objects are session
+  objects, so they are reclaimed when the session closes — but the session lives as long as the
+  process, so in practice one accumulated per `Encrypt` and per `Decrypt` until the token ran
+  out of object slots. The Go-side copies were already wiped; this is the token-side
+  counterpart.
+- **The gRPC socket's permissions were applied after creation and ignored on failure.** The mode
+  was set with `os.Chmod` after `net.Listen`, which resolves the path a second time: anything
+  able to swap the socket for a symlink in between had `0775` applied to the symlink's target
+  instead, and the default socket lives under `$TMPDIR`. A failed chmod was logged and then
+  ignored, so the plugin went on to serve DEK unwrapping on a socket whose permissions nobody
+  had chosen. The socket is now created under a umask, so `bind(2)` sets the final mode itself
+  and the path is never resolved twice, and every failure is fatal. An **abstract socket**
+  (`--socket @name`) is now rejected outright: it lives in the network namespace rather than the
+  filesystem, so it has no owner and no mode, and every process in the namespace could connect
+  and ask the plugin to unwrap DEKs.
+- **gRPC server reflection was enabled in production.** It published the service schema to
+  anything that could open the socket. `kube-apiserver` is compiled against the KMS v2 protobuf
+  and the e2e suite passes `grpcurl -proto`, so nothing needed it.
+- **The gRPC server accepted its library defaults for every resource bound** — 4 MiB per received
+  message, unlimited sent, unlimited concurrent streams, no idle timeout. The largest legal
+  KMS v2 message is about 34 kB, so messages are now capped at 64 kB in both directions, with
+  concurrent streams, a connection timeout and a maximum idle time alongside.
+- **`build.sh --dev` passed its branch argument through `eval`**, so any shell metacharacter in
+  the value was executed. The `eval` bought nothing — `GOPROXY=direct` is an ordinary command
+  prefix and the module query is a single argument. All three `eval`s in the script are gone,
+  branch names are validated, and failures from `git switch` and `go get` now stop the build.
+
+### Fixed
+
+- **`serve rotation` opened the old KEK's token for the active KEK too.** `initRotatedProvider`
+  built the active token's `crypto11.Config` from the `serve` flags, never used it, and passed
+  the old KEK's configuration to `NewP11` as *both* the active and the rotation configuration. So
+  `p.ctx` — the context that resolves the active KEK and performs every encryption — was opened
+  against the old KEK's token, PIN and driver quirks. Where both KEKs live on one token the two
+  configurations are identical and nothing is visibly wrong, which is why it survived: every
+  rotation test in `test/e2e` and `test/integration` uses a single shared token by design. It
+  broke exactly the case the second set of `--old-p11-*` flags exists for — an old KEK on another
+  token or another HSM — where the active KEK would be looked up on the wrong token, and
+  `--p11-pin`, `--p11-label`, `--p11-slot` and `--provider` were silently ignored in favour of
+  their `--old-*` counterparts.
+
+  The switch that builds a `crypto11.Config` was extracted to `newCrypto11Config`, so the two
+  tokens are now built by one function from two disjoint sets of flags rather than by three
+  copies of the same block; passing the wrong one no longer compiles.
+  `TestInitRotatedProvider_ActiveTokenIsOpenedFromServeFlags` pins the wiring by giving the two
+  tokens different PKCS #11 library paths and asserting which one is opened — no HSM required,
+  since what is asserted is which path reaches crypto11, not that anything succeeds. An unknown
+  `--provider` / `--old-provider` now also names the offending value instead of reporting a bare
+  "unknown provider".
+
+### Removed
+
+- **`--auto-create` is gone.** The flag promised to generate the KEK on the token when it was
+  missing, and could not: two independent things stopped it. `NewP11` resolves the KEK through
+  `GetKeyIDAndLabel` (p11.go:204) *before* reaching the `if p.createKey` block (p11.go:289), and
+  that resolution fails hard when the key is absent — which is the only situation auto-create
+  exists for. Even reached directly, the block tested `foundDefaultDek == nil` after
+  `crypto11.Context.FindKey`, which in crypto11 v2 returns an error rather than a nil key when
+  nothing matches, so the branch was unreachable a second time over. The flag dates from the
+  repository's first commit (September 2020), where it was shared with a `bootstrap` command
+  ("Bootstrap/regenerate EST PKI") that went away with the Istio/EST code, and where the block
+  still ran directly after `crypto11.Configure`; the KMS v2 rewrite inserted the KEK lookup in
+  front of it and left it stranded. `providers.NewP11` loses its `createKey` parameter with it.
+
+  Should key provisioning come back, it needs a design rather than this flag: the old code
+  always generated a 256-bit AES secret key regardless of `--algorithm-family` (so it could not
+  serve `rsa-oaep` or `ml-kem`), labelled it with a random UUID as `CKA_ID` instead of the
+  requested `--p11-key-id`, and never created the separate HMAC key that `aes-cbc` needs. It
+  would also have to cover `serve rotation`, where the key being created is the *new active*
+  KEK while the old one keeps decrypting — which is precisely the moment a fresh key is wanted.
+
+- **`--native-path` / `-p`, `--old-native-path` and `--old-socket` are gone.** All three were
+  parsed and then ignored: `--native-path` has been in the CLI since the repository's first
+  commit (September 2020) describing a "native provider (Files only)" that was never written —
+  `pkg/providers/p11.go` is the only provider that has ever existed, and `--provider` accepts
+  only `p11`, `softhsm`, `luna` and `dpod` — while `serve rotation` has always listened on the
+  `--socket` of its parent `serve` command. Passing any of them now fails with "unknown flag"
+  instead of silently doing nothing. They are also dropped from `configs/config.example.yaml`.
+
+### Changed
+
+- **CLI help reviewed end to end.** Every `Short`, `Long`, example and flag description was
+  rewritten to say what the command actually does. The notable corrections:
+  - the root command described itself as "Thales KMS Server for K8S" and never mentioned that
+    the plugin supports KEK rotation at all; it now names both ways to serve, so
+    `serve rotation` is discoverable from the first screen;
+  - every `serve` example was un-pasteable — the first line ended without a `\`, so a shell ran
+    `k8s-kms-plugin` on its own and then `serve …` as a separate command;
+  - examples no longer pass `--p11-pin` on the command line, which any user on the host can read
+    out of `ps`; they use `K8S_KMS_PLUGIN_SERVE_P11_PIN` or the interactive prompt;
+  - `--config` advertised the environment variable `K8S_KMS_PLUGIN_CONFIG_FILE`, which does not
+    exist (it is `K8S_KMS_PLUGIN_CONFIG`), and a default of `k8s-kms-plugin.config.yaml`, which
+    was never searched for (the searched name is `k8s-kms-plugin.conf.{yaml,yml,json,toml}`);
+  - the `serve` and `serve rotation` help pinned `k8s.io/kms@v0.34.1` while the module is on
+    v0.36.3, and pointed at a repository-relative path an installed binary cannot resolve;
+  - **pkg.go.dev links are now uniform and unpinned everywhere.** Three links had drifted to two
+    stale versions — `k8s.io/kms@v0.34.1` in `README.md` and `k8s.io/kms@v0.31.3` twice in a
+    `pkg/providers/p11.go` doc comment — while `go.mod` was on v0.36.3 and the other ~18 links
+    already used the unpinned form. They all use `https://pkg.go.dev/k8s.io/kms/apis/v2` now,
+    which follows the module, and `make check-doc-links` fails on a pinned pkg.go.dev URL in
+    Markdown or in a Go doc comment so they cannot drift apart again. A stray backtick inside a
+    `StatusRequest` link in `docs/kubernetes-guides/k3s-kubernetes.md` is fixed too;
+  - `serve rotation` called itself "k8s-kms-pluginc".
+  The scattered, inconsistent `Env var: …` suffixes are replaced by one line under the flags
+  explaining how every flag maps to an environment variable and a config file key.
+- **Help output is styled and wrapped.** Section headers, command names and flag names are
+  bolded, defaults and example comments dimmed, and flag descriptions wrapped to the terminal
+  width (capped at 110 columns, honouring `COLUMNS`). Styling is applied to the rendered help
+  only, never to the stored strings, so shell completion, the `docs` command and the generated
+  flag table are byte-for-byte unaffected; `NO_COLOR`, `CLICOLOR_FORCE` and a non-terminal
+  stdout are all honoured. The subcommand list now comes before the examples, so
+  `serve rotation` is not buried under a page of example command lines.
+- **Shell completion classifies every flag.** Values that cannot be guessed — PINs, CKA_LABELs,
+  hex CKA_IDs, slot numbers — no longer fall back to offering file names; `--p11-lib` and
+  `--old-p11-lib` complete shared libraries, `--config` completes the configuration formats that
+  are actually parsed, and `--output-dir` completes directories.
+- **A runtime failure no longer prints the usage screen.** An unreachable token or a socket that
+  cannot be bound is not a usage mistake, so it now produces a single error line; flag parsing,
+  required flags and mutually exclusive groups still print usage. The error is also printed once
+  rather than twice, and on stderr rather than stdout.
+- **`make doc` is reproducible again**, which is what the CI freshness check assumes. Cobra's
+  "Auto generated by spf13/cobra on <date>" footer stamped the run date into all twelve
+  generated pages, so the check failed on any day but the one they were last committed
+  (`DisableAutoGenTag`), and `--provenance`'s default was rendered from `GITHUB_ACTIONS`, so the
+  pages differed between CI and a laptop (its `DefValue` now carries a stable placeholder, the
+  same treatment `--output-dir` already had).
+- **Configuration resolution moved from [Viper](https://github.com/spf13/viper) to
+  [koanf](https://github.com/knadh/koanf)**, keeping Cobra for the commands and flags. The user
+  contract is unchanged: the same flags, the same `K8S_KMS_PLUGIN_*` environment variables, the
+  same config file sections, resolved with the same priority — CLI flags > environment variables >
+  configuration file > defaults. Configuration files keep mirroring the command hierarchy
+  (`k8s-kms-plugin.serve.rotation.old-p11-pin`), as do the environment variables
+  (`K8S_KMS_PLUGIN_SERVE_ROTATION_OLD_P11_PIN`). YAML, TOML and JSON are still accepted, and the
+  config file is still discovered from `--config`, then `K8S_KMS_PLUGIN_CONFIG`, then
+  `k8s-kms-plugin.conf.{yaml,yml,json,toml}` in `$HOME` or `$HOME/.config/k8s-kms-plugin/`.
+- `viper-patch-sub.go` is gone, and with it the workaround it existed for: `viper.Sub("section")`
+  dropped the flag/env/default priority chain, so `UnmarshalSubMergedE` had to merge a config
+  subsection back into the global Viper config layer before unmarshalling it. koanf layers the
+  providers explicitly — config file section, then environment, then flags — so a subsection is
+  just another layer and the ordering is stated in one place. The new
+  [`config.go`](cmd/k8s-kms-plugin/cmd/config.go) replaces it.
+- The one workaround that survives is cobra's, not Viper's: `MarkFlagsOneRequired` and
+  `MarkFlagsMutuallyExclusive` decide from whether a flag was typed on the command line, so a value
+  arriving through an environment variable or the config file is still written back into the cobra
+  flag set. It is now applied only to values a user actually provided, so a config file restating a
+  default (`debug: false`) no longer marks that flag as set — which previously could collide with
+  the flag it is mutually exclusive with.
+- `--debug` now selects the debug level from its resolved *value* rather than from the fact that it
+  was passed, so `--debug=false` no longer forces debug logging.
+- The per-command flag structs and their validators were renamed accordingly: `ViperFlagsServe` →
+  `ServeFlags`, `ViperFlagsRotation` → `RotationFlags`, `ViperFlagsRoot`/`ViperFlagsVersion`/
+  `ViperFlagsDocs` likewise, and `sanitizeViperFlagsServe` / `sanitizeViperFlagsRotation` →
+  `sanitizeServeFlags` / `sanitizeRotationFlags`. Their struct tags moved from `mapstructure` to
+  `koanf`. These are internal names; no CLI, environment variable or config file key changed.
+- Dependencies: `github.com/spf13/viper` and `github.com/mitchellh/go-homedir` (archived) are out —
+  the home directory now comes from `os.UserHomeDir`. `github.com/knadh/koanf/v2` and its yaml,
+  toml, json, env, posflag and confmap modules are in.
+
 ## v1.0.0 — first stable release: KMS v2, PKCS#11 v3.2 and ML-KEM
 
 `k8s-kms-plugin` has been on `0.x` since its start, with no stability contract. v1.0.0 is its first
@@ -55,7 +239,7 @@ and [pkcs11-go](https://github.com/eclipse-keypont/pkcs11-go) from the
   `--socket` flag and its own `--version` output; built in CI alongside the main plugin.
 - End-to-end `serve rotation` tests covering all 16 old/new algorithm-family combinations.
 - A Cryptography Bill of Materials-style Notices generator (`go-licenses`-based `NOTICES.md`).
-- CI workflows for build, lint, secret scanning (Gitleaks) and OpenSSF Scorecard; `make lint-fix`
+- CI workflows for build, lint, secret scanning (GitHub native) and OpenSSF Scorecard; `make lint-fix`
   Makefile target.
 
 ### Fixed
@@ -96,6 +280,9 @@ and [pkcs11-go](https://github.com/eclipse-keypont/pkcs11-go) from the
   `.goreleaser.yml` now pass `--bundle` to `cosign sign-blob`, which is required by cosign v3 and is
   what `sigstore/cosign-installer` now provides.
 - Reference to the project's Eclipse Foundation donation added to project docs.
+- `govulncheck` now runs the `golang.org/x/vuln` tool directly (pinned) instead of
+  `golang/govulncheck-action`, whose internal `actions/checkout` collided with the workflow's own
+  checkout on the `Authorization` header (`git` error 400).
 
 ## Pre-1.0 (`ThalesGroup` era, v0.x)
 

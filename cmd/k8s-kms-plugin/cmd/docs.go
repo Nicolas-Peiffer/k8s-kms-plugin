@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 
 	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/logging"
 	"github.com/eclipse-keysealer/k8s-kms-plugin/pkg/version"
@@ -23,33 +22,51 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 )
 
-// ViperFlagsDocs defines a struct to hold the values of cobra CLI flags and use viper to populate them
-type ViperFlagsDocs struct {
-	Format     string `mapstructure:"format"`
-	OutputDir  string `mapstructure:"output-dir"`
-	Provenance bool   `mapstructure:"provenance"`
+// DocsFlags holds the resolved values of the docs command flags. The koanf tags are the long flag
+// names, which are also the keys of the k8s-kms-plugin.docs section of the config file.
+type DocsFlags struct {
+	Format     string `koanf:"format"`
+	OutputDir  string `koanf:"output-dir"`
+	Provenance bool   `koanf:"provenance"`
 }
 
-// Declare the viper CLI flag values buffer
-var vprFlgsDocs ViperFlagsDocs
+// flagsDocs holds the resolved docs command configuration.
+var flagsDocs DocsFlags
 
 // docsCmd represents the docs command
 var docsCmd = &cobra.Command{
 	Use:   "docs",
-	Short: "Generate CLI documentation",
-	Long:  `Generate CLI documentation (markdown, man, rst, html)"`,
-	// Initialize and populate cobra CLI flags values with viper during the Persistent pre-run
+	Short: "Generate the CLI reference documentation",
+	Long: `Generate the CLI reference for every command and flag of k8s-kms-plugin.
+
+The markdown tree and the flag/environment-variable table are committed to
+docs/cli-user-interface/, so this command is what "make doc" runs after a flag is added,
+renamed or reworded. Its default output is deterministic: two runs on the same source tree
+produce byte-identical files.`,
+	Example: `
+  # Regenerate the committed markdown reference (what "make doc" does).
+  k8s-kms-plugin docs --format markdown --output-dir docs/cli-user-interface/markdown/
+
+  # Regenerate the committed flag/env-var table.
+  k8s-kms-plugin docs --format cli-table-pretty --output-dir docs/cli-user-interface/txt/
+
+  # Look at the flag table without writing anything you have to clean up afterwards.
+  k8s-kms-plugin docs --format cli-table-pretty
+`,
+	// Resolve the docs flags from all input sources during the persistent pre-run
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-		if err := InitViperSubCmdE(viper.GetViper(), cmd, &vprFlgsDocs); err != nil {
-			slog.Error("Error initializing Viper", "cobra_cmd", cmd.Use, "error", err)
+		if _, err := resolveCmdConfigE(cmd, &flagsDocs); err != nil {
+			slog.Error("error resolving configuration", "cobra_cmd", cmd.Name(), "error", err)
 			return err
 		}
 		return nil
 	},
-	RunE: func(_ *cobra.Command, _ []string) error {
-		err := generateCobraDocs(vprFlgsDocs.Format, vprFlgsDocs.OutputDir, vprFlgsDocs.Provenance)
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		silenceUsage(cmd)
+
+		err := generateCobraDocs(flagsDocs.Format, flagsDocs.OutputDir, flagsDocs.Provenance)
 		if err != nil {
-			slog.Error("error generating docs", "format", vprFlgsDocs.Format, "output_dir", vprFlgsDocs.OutputDir, "error", err)
+			slog.Error("error generating docs", "format", flagsDocs.Format, "output_dir", flagsDocs.OutputDir, "error", err)
 		}
 		return err
 	},
@@ -58,14 +75,16 @@ var docsCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(docsCmd)
 
-	docsCmd.Flags().StringP("format", "f", "markdown", "Docs Output format. Preferred is markdown. Supported formats: markdown, man, rst, yaml, cli-table-csv, cli-table-pretty, cli-table-html, all.")
-	if err := docsCmd.RegisterFlagCompletionFunc("format", func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		return []string{"markdown", "man", "rst", "yaml", "cli-table-csv", "cli-table-pretty", "cli-table-html", "all"}, cobra.ShellCompDirectiveNoFileComp
-	}); err != nil {
-		slog.Error("error registering flag completion function", "flag", "format", "error", err)
-	}
+	docsCmd.Flags().StringP("format", "f", "markdown",
+		"Output format. One of: markdown (what the documentation site publishes), man, rst, yaml, "+
+			"cli-table-csv, cli-table-pretty, cli-table-html, all.")
+	registerFixedCompletion(docsCmd, "format",
+		"markdown", "man", "rst", "yaml", "cli-table-csv", "cli-table-pretty", "cli-table-html", "all")
 
-	docsCmd.Flags().StringP("output-dir", "o", filepath.Join(os.TempDir(), fmt.Sprintf("k8s-kms-plugin-docs-%s", time.Now().Format(time.RFC3339))), "Output directory")
+	docsCmd.Flags().StringP("output-dir", "o", filepath.Join(os.TempDir(), fmt.Sprintf("k8s-kms-plugin-docs-%s", time.Now().Format(time.RFC3339))),
+		"Directory the generated files are written to. Defaults to a fresh timestamped directory "+
+			"under $TMPDIR, so two ad hoc runs never overwrite each other.")
+	markFlagDirname(docsCmd, "output-dir")
 
 	// The real default is a fresh timestamped directory under $TMPDIR, so two ad hoc runs never
 	// overwrite each other. That value cannot be allowed to reach the generated documentation:
@@ -82,7 +101,17 @@ func init() {
 	// built it, and to false locally so `make doc` stays byte-reproducible and its diffs stay
 	// reviewable. Pass --provenance=false in CI to opt back out.
 	docsCmd.Flags().Bool("provenance", os.Getenv("GITHUB_ACTIONS") == "true",
-		"Stamp build and CI run provenance into the front matter of generated markdown. Defaults to true when GITHUB_ACTIONS=true.")
+		"Stamp the build and CI run that produced the pages into the front matter of the generated "+
+			"markdown. Defaults to true when GITHUB_ACTIONS=true, so the published site records its "+
+			"build while the committed tree stays free of volatile data.")
+
+	// Same reasoning as --output-dir above, for a value that varies by *environment* rather than by
+	// clock: this flag's real default is derived from GITHUB_ACTIONS, and cobra renders every
+	// default into the generated pages. Left alone, the committed reference says "true" when it was
+	// regenerated in CI and "false" when regenerated on a laptop, so the two disagree forever and
+	// whichever ran last makes the other look stale. The usage text above already states the rule,
+	// so the rendered default only has to be stable.
+	docsCmd.Flags().Lookup("provenance").DefValue = "auto"
 }
 
 // Front matter for the generated markdown pages.
@@ -221,15 +250,22 @@ func ciProvenance() []string {
 func renderFrontMatter(meta docPageMeta, provenance bool) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString("title: " + yamlQuote(meta.Title) + "\n")
+	b.WriteString("title: ")
+	b.WriteString(yamlQuote(meta.Title))
+	b.WriteString("\n")
 	if meta.Description != "" {
-		b.WriteString("description: " + yamlQuote(meta.Description) + "\n")
+		b.WriteString("description: ")
+		b.WriteString(yamlQuote(meta.Description))
+		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "weight: %d\n", meta.Weight)
-	b.WriteString("generator: " + yamlQuote("k8s-kms-plugin docs -f markdown") + "\n")
+	b.WriteString("generator: ")
+	b.WriteString(yamlQuote("k8s-kms-plugin docs -f markdown"))
+	b.WriteString("\n")
 	if provenance {
 		for _, line := range ciProvenance() {
-			b.WriteString(line + "\n")
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 	}
 	b.WriteString("---\n\n")
@@ -279,7 +315,7 @@ func genMarkdownTreeWithFrontMatter(root *cobra.Command, dir string, provenance 
 //   - Flag: the flag name
 //   - Short Flag: the short flag name
 //   - Env Var: the environment variable name for the flag
-//   - Viper Key: the viper key for the flag
+//   - Config File Keys: the configuration file key path of the flag
 //   - Default: the default value for the flag
 //   - Type: the type of the flag
 //   - Persistent Flag: whether the flag is persistent
@@ -341,7 +377,8 @@ func getFlagTable(c *cobra.Command, format string) string {
 // since the csv, html and plain-text renderings are consumed as data rather than published as
 // pages.
 func writeFlagTableToFile(c *cobra.Command, format string, filename string, frontMatter string) error {
-	f, err := os.Create(filename) //nolint:gosec // filename derives from the operator-supplied --output-dir CLI flag, not untrusted input
+	// #nosec G304 -- filename derives from the operator-supplied --output-dir CLI flag, not untrusted input
+	f, err := os.Create(filename) //nolint:gosec
 	if err != nil {
 		return err
 	}
@@ -368,13 +405,13 @@ func flagTableFrontMatter(provenance bool) string {
 	}, provenance)
 }
 
-// walkCobraFlagsPretty traverses the cobra command tree and prints a pretty table of flags -> env vars -> viper keys
+// walkCobraFlagsPretty traverses the cobra command tree and prints a pretty table of flags -> env vars -> config file keys
 // Only local and non-persistent flags are printed. Local persistent flags are printed as well, but only for the local commands
 // and not its subcommands.
 // The table is printed to t, which is a table.Writer
-// The section is the path for a flag in a Viper configuration file, obtained by replacing spaces with dots in the command path
+// The section is the path for a flag in a configuration file, obtained by replacing spaces with dots in the command path
 func walkCobraFlagsPretty(cmd *cobra.Command, t table.Writer) {
-	// section is the path (JSON, YAML) for a flag in a Viper configuration file
+	// section is the path (YAML, TOML, JSON) for a flag in a configuration file
 	section := strings.ReplaceAll(cmd.CommandPath(), " ", ".")
 
 	// Add only flags that are local and do not add persistent flags
@@ -394,6 +431,13 @@ func walkCobraFlagsPretty(cmd *cobra.Command, t table.Writer) {
 	// Iterate recurssively on sub command but ignore inherited flags from parent commands to prevent duplication of
 	// flags and persistent flags in the documentation
 	for _, sub := range cmd.Commands() {
+		// Skip cobra's built-in `help` command. It is not part of this CLI's surface — no page is
+		// generated for it either — and cobra *adds* it to the tree while generating, so including
+		// it made the table depend on whether anything had generated documentation earlier in the
+		// same process.
+		if sub.Name() == "help" {
+			continue
+		}
 		// Add separator between different commands. This has no effect if the table is rendered as markdown
 		t.AppendSeparator()
 		walkCobraFlagsPretty(sub, t)
@@ -404,7 +448,7 @@ func walkCobraFlagsPretty(cmd *cobra.Command, t table.Writer) {
 // Inputs:
 // - cmd: the cobra command that contains the flag
 // - f: the flag
-// - section: the path (JSON, YAML) for a flag in a Viper configuration file
+// - section: the path (YAML, TOML, JSON) for a flag in a configuration file
 // - persistent: whether the flag is a persistent flag or not
 //
 // The columns of the table are:
@@ -412,7 +456,7 @@ func walkCobraFlagsPretty(cmd *cobra.Command, t table.Writer) {
 // - Flag: the flag name. Example: --host
 // - Short Flag: the short flag name. Example: -p
 // - Env Var: the environment variable name that can be used to override the flag. Example: K8S_KMS_PLUGIN_SERVE_HOST.
-// - Viper Key: the full key path in a Viper configuration file (JSON or YAML). Example: k8s-kms-plugin.serve.host
+// - Config File Keys: the full key path in a configuration file (YAML, TOML or JSON). Example: k8s-kms-plugin.serve.host
 // - Default: the default value of the flag. Example: host => 0.0.0.0
 // - Type: the type of the flag. Example: string
 // - Persistent Flag: whether the flag is a persistent flag
@@ -425,9 +469,9 @@ func buildTableRow(cmd *cobra.Command, f *pflag.Flag, section string, persistent
 	// envVar is the environment variable name that can be used to override the flag. Ex.: K8S_KMS_PLUGIN_SERVE_HOST
 	envVar := envVarPrefix + "_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
 
-	// viperKey is the keyname and fullpath for the viper configuration file (JSON or YAML)
+	// configKey is the key name and full path for the configuration file (YAML, TOML or JSON)
 	// Example: k8s-kms-plugin.serve.host for the command k8s-kms-plugin serve --host
-	viperKey := section + "." + f.Name
+	configKey := section + "." + f.Name
 
 	return table.Row{
 		cmd.CommandPath(),
@@ -440,7 +484,7 @@ func buildTableRow(cmd *cobra.Command, f *pflag.Flag, section string, persistent
 			return ""
 		}(),
 		envVar,
-		viperKey,
+		configKey,
 		f.DefValue,
 		f.Value.Type(),
 		persistent,
@@ -488,6 +532,25 @@ func writeMarkdownReadme(dir string, provenance bool) error {
 	return os.WriteFile(filepath.Join(dir, "README.md"), []byte(readme.String()), 0600)
 }
 
+// initHelpFlags registers --help across the whole command tree before anything is generated.
+//
+// Cobra adds that flag lazily: Execute() adds it to the command actually being run, and
+// doc.GenMarkdownCustom adds it to each command as the tree walk reaches it. The flag table is
+// written before that walk, so it used to list --help for `docs` — the command being executed — and
+// for nothing else, which is neither true (every command has it) nor stable: a second generation in
+// the same process produced a different table, because the first walk had registered the flag
+// everywhere by then.
+//
+// Doing it up front makes the output depend only on the command definitions. Note this deliberately
+// does not call InitDefaultHelpCmd: that adds a `help` *subcommand*, which the walk would then emit
+// a page for.
+func initHelpFlags(cmd *cobra.Command) {
+	cmd.InitDefaultHelpFlag()
+	for _, c := range cmd.Commands() {
+		initHelpFlags(c)
+	}
+}
+
 // generateCobraDocs generates CLI documentation for the k8s-kms-plugin in the specified format.
 // It supports generating documentation in "markdown", "man", "rst", "yaml", "table", or "all" formats.
 // The output directory is created if it does not exist. If the format is "all",
@@ -517,6 +580,8 @@ func generateCobraDocs(format, out string, provenance bool) error {
 		Section: "1",
 		Manual:  version.RawGitDescribe,
 	}
+
+	initHelpFlags(rootCmd)
 
 	// TODO: improve and clean this switch case
 	switch format {
