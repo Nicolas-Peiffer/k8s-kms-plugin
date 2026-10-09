@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `k8s-kms-plugin` is a gRPC service implementing the [Kubernetes KMS v2 API](https://pkg.go.dev/k8s.io/kms/apis/v2),
 backed by a PKCS #11 TPM or HSM. It is part of [Eclipse KeySealer](https://projects.eclipse.org/projects/technology.keysealer)
-and consumes `crypto11`, `gose` and `pkcs11-go` from [Eclipse Keypont](https://projects.eclipse.org/projects/technology.keypont).
+and consumes `crypto11`, `gose` and `pkcs11-go` from [Eclipse KeyPont](https://projects.eclipse.org/projects/technology.keypont).
 
 Read `CHANGELOG.md` first when touching anything cryptographic — the v1.0.0 entry is the authoritative
 record of the KMS v1 → v2 migration, the PKCS#11 binding swap, and every deliberate behavioural choice

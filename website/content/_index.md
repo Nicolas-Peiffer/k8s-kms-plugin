@@ -9,7 +9,7 @@ layout: hextra-home
   {{< icon name="arrow-circle-right" attributes="height=14" >}}
 {{< /hextra/hero-badge >}}
 {{< hextra/hero-badge link="https://projects.eclipse.org/projects/technology.keypont" >}}
-  <span>Relying on Eclipse Keypont</span>
+  <span>Relying on Eclipse KeyPont</span>
   {{< icon name="arrow-circle-right" attributes="height=14" >}}
 {{< /hextra/hero-badge >}}
 </div>
