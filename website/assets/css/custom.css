@@ -33,3 +33,18 @@
 .kms-hero-figure pre.mermaid {
   margin-top: 0;
 }
+
+/*
+ * Mermaid's light theme draws edge labels on an 80%-opaque background, so the arrow shows through the
+ * label text; its dark theme is already opaque. Same colour, full opacity, light mode only (Hextra
+ * marks dark mode with html.dark). Not themeVariables in the diagram: those would apply in dark mode
+ * too, and the README copy has to keep following GitHub's theme.
+ *
+ * !important because Mermaid writes its colours into each diagram's own <style> under an ID selector
+ * (#mermaid-<n> .edgeLabel), which outranks any class selector here.
+ */
+html:not(.dark) .kms-hero-figure .edgeLabel,
+html:not(.dark) .kms-hero-figure .edgeLabel p,
+html:not(.dark) .kms-hero-figure .labelBkg {
+  background-color: rgb(232, 232, 232) !important;
+}
