@@ -6,28 +6,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `k8s-kms-plugin` is a gRPC service implementing the [Kubernetes KMS v2 API](https://pkg.go.dev/k8s.io/kms/apis/v2),
 backed by a PKCS #11 TPM or HSM. It is part of [Eclipse KeySealer](https://projects.eclipse.org/projects/technology.keysealer)
-and consumes `crypto11`, `gose` and `pkcs11-go` from [Eclipse Keypont](https://projects.eclipse.org/projects/technology.keypont).
+and consumes `crypto11`, `gose` and `pkcs11-go` from [Eclipse KeyPont](https://projects.eclipse.org/projects/technology.keypont).
 
 Read `CHANGELOG.md` first when touching anything cryptographic — the v1.0.0 entry is the authoritative
 record of the KMS v1 → v2 migration, the PKCS#11 binding swap, and every deliberate behavioural choice
 (including bug fixes with data-at-rest compatibility implications).
 
-This repo is a **fork used as a playground** to try things out before the work lands upstream at
-`eclipse-keysealer/k8s-kms-plugin`. Expect to sync from upstream rather than the fork being the source of truth.
+### Repository URLs in the documentation
 
-### Fork-local values to switch before a pull request upstream
+Every link out of `docs/`, and every badge and site link in `README.md`, uses an absolute
+`eclipse-keysealer` URL on purpose: a fork that copies these files keeps pointing readers at this
+repository rather than silently advertising the fork's own half-built copy.
 
-Every link out of `docs/` uses an absolute `github.com/eclipse-keysealer/...` URL on purpose. Three values
-deliberately break that rule because upstream has no Pages site and no `docs.yml` yet — grep for
-`FORK-LOCAL`, and for `nicolas-peiffer`, to find them:
+The one value that is *not* absolute is `website/hugo.toml`'s `baseURL`. It is only a local-dev
+default — the Docs workflow computes the real URL from the owner and repository actually running the
+build and passes it with `--baseURL`, so the same config publishes correctly from here and from any
+fork with nothing to remember. Leave it alone; override it locally with
+`hugo --baseURL https://example.github.io/k8s-kms-plugin/` if you need to.
+
+If you develop the site on a fork and want its badges to track your own Pages deployment, change
+them in your branch but switch them back before opening a pull request here.
+
+#### Fork-local values in this fork
+
+This repository is the `Nicolas-Peiffer` **fork**, used as a playground before work lands upstream at
+`eclipse-keysealer/k8s-kms-plugin`; it syncs *from* upstream rather than being the source of truth.
+It deliberately carries the exception above — grep for `FORK-LOCAL`, and for `nicolas-peiffer`, to
+find every value to switch back before a pull request upstream:
 
 | Where | Value | Switch to |
 |-------|-------|-----------|
 | `README.md` — documentation badge + Docs workflow badge | `nicolas-peiffer.github.io/…`, `github.com/Nicolas-Peiffer/…` | the `eclipse-keysealer` equivalents |
 | `README.md` — "Browse it online" and glossary links in the Documentation section | `nicolas-peiffer.github.io/…` | `eclipse-keysealer.github.io/…` |
-| `website/hugo.toml` — `baseURL` | `nicolas-peiffer.github.io/…` | leave it; it is only a local-dev default, and the Docs workflow computes the real URL from the repository running the build |
 
-The two README ones are the ones that matter: they would silently point upstream readers at a fork.
+When syncing from upstream, these are the only intended differences: every other conflict resolves
+to upstream's version, and this section itself is fork-local too.
+
+### Release artefact names in the documentation
+
+Any command in the docs that downloads, installs or verifies a release artefact must use the **real
+asset names from the latest release on the upstream repository** — currently
+[`v1.0.0-rc5`](https://github.com/eclipse-keysealer/k8s-kms-plugin/releases/tag/v1.0.0-rc5). Read them
+off the release rather than reconstructing them from `.goreleaser.yml`, and re-check when a newer tag
+lands. The asset list is at `https://github.com/eclipse-keysealer/k8s-kms-plugin/releases/expanded_assets/<tag>`
+(the release page itself lazy-loads its assets, so fetching that page returns none of them).
+
+Reconstructing names is what goes wrong, because **each packaging format spells a pre-release
+differently** and none of them matches the tag:
+
+| Format | `v1.0.0-rc5` becomes | Asset |
+|--------|----------------------|-------|
+| binary / archive | `1.0.0-rc5` | `k8s-kms-plugin_linux_amd64_1.0.0-rc5`, `.tar.gz`, `.zip` |
+| `apk` | `1.0.0_rc5` | `k8s-kms-plugin_1.0.0_rc5_x86_64.apk` |
+| `archlinux` | `1.0.0rc5` | `k8s-kms-plugin-1.0.0rc5-1-x86_64.pkg.tar.zst` |
+| `deb` / `rpm` | `1.0.0.rc5` | `k8s-kms-plugin_1.0.0.rc5_amd64.deb`, `k8s-kms-plugin-1.0.0.rc5-1.x86_64.rpm` |
+
+Note there is **no `v` prefix** on any artefact — goreleaser's `.Version` strips it — and that the
+`deb`/`rpm` `.` is a deliberate substitution for the conventional `~`, which GitHub rejects in an
+asset name. Checksums are `k8s-kms-plugin_checksums.txt`, Sigstore bundles are
+`<asset>-keyless.bundle.json`, and SLSA provenance is a single `multiple.intoto.jsonl`.
+`docs/installation.md` documents the whole mapping; keep it in step.
 
 ## Commands
 
@@ -94,11 +132,27 @@ These write files that are committed, so re-run them when the underlying source 
   glossary-check` is the CI guard)
 - `make notices` — after changing dependencies (regenerates `NOTICES.md`)
 
-`make doc` is **reproducible**: two runs on the same tree produce byte-identical output, so any
-diff is a real CLI change. Keep it that way — a value that varies per run or per machine must not
-reach the generated pages. `--output-dir`'s default is a timestamped temp directory, so its
-`DefValue` is deliberately overridden with a `$TMPDIR/...<timestamp>` placeholder in `docs.go`;
-without that the timestamp lands in two generated files on every run.
+`make doc` is **reproducible**, and CI's "is the CLI reference up to date" check depends on it
+entirely: it regenerates and fails on any diff, so anything that varies by clock, machine or
+environment turns into a red build with no CLI change behind it. A committed generated file can never
+contain its own commit hash, so provenance is CI-only by design (below) — but three other leaks had
+to be closed, all in `docs.go`, all render-only masks that leave behaviour untouched:
+
+| Leak | What it did | Mask |
+|------|-------------|------|
+| `--output-dir` default is a timestamped temp dir | cobra renders defaults into the pages, so the clock landed in two files every run | `DefValue` overridden with a `$TMPDIR/...<timestamp>` placeholder |
+| `--provenance` default is `GITHUB_ACTIONS == "true"` | the rendered default read `true` when regenerated in CI and `false` on a laptop, so each made the other look stale | `DefValue` overridden with `auto` |
+| cobra's `###### Auto generated by spf13/cobra on <date>` footer | `time.Now()`, so the reference went stale on a *calendar boundary* | `rootCmd.DisableAutoGenTag = true` |
+
+Cobra also mutates the command tree while generating — `GenMarkdownCustom` calls
+`InitDefaultHelpFlag` and `InitDefaultHelpCmd` per command — so a second generation in the same
+process saw flags and a `help` command the first did not. `initHelpFlags` registers `--help` across
+the tree up front and the flag-table walk skips the `help` command, which is cobra's, not this CLI's.
+
+Four tests in `docs_test.go` pin all of it: two runs are byte-identical, the output is identical with
+and without `GITHUB_ACTIONS`, no page contains today's date, and every generated page has front
+matter. Add to them rather than trusting a manual check — every one of these bugs was invisible on
+the day it was introduced.
 
 Build and CI provenance (`build_commit`, `ci_run_url`, …) goes into the generated front matter only
 under `--provenance`, which `k8s-kms-plugin docs` enables automatically when `GITHUB_ACTIONS=true`.
@@ -110,6 +164,11 @@ committed tree stays free of volatile data.
 `make check-doc-links` (`scripts/check-doc-links.py`) verifies every relative Markdown link and
 `#anchor` in `README.md`, `CHANGELOG.md` and `docs/`. Anchors rot silently, so run it after moving
 or renaming anything under `docs/`.
+
+It also rejects a **pkg.go.dev URL that pins a module version**, across Markdown *and* Go doc
+comments (`cmd/`, `pkg/`, `tools/`, `test/`). `https://pkg.go.dev/k8s.io/kms/apis/v2` follows the
+module; inserting an `@<version>` freezes it and nothing updates it on a dependency bump — which is
+how three links ended up on two stale versions while `go.mod` was on a third.
 
 Headings carry **no manual section numbers** — they were removed because a static site generator
 derives ordering from the document tree, and the hand-written numbers had already drifted out of
@@ -125,7 +184,7 @@ documentation pages stay relative. `docs/README.md` states both rules.
 families, Quick Start, a documentation map, contributing, licence. Don't grow it back; add or extend a
 docs page and link it from the map.
 
-The manual lives in `docs/`, as five top-level pages — `overview.md`, `installation.md`,
+The manual lives in `docs/`, as six top-level pages — `overview.md`, `quick-start.md`, `installation.md`,
 `cryptographic-schemes.md`, `development.md`, `supply-chain-security.md` — plus `glossary.md` and four
 sections, each with a `README.md` index that is mounted as the section landing page:
 
@@ -135,6 +194,17 @@ sections, each with a `README.md` index that is mounted as the section landing p
 | `kubernetes-guides/` | 60 | `KinD` and `k3s`. Neither is presented as the default choice |
 | `tools-and-scripts/` | 65 | Documentation for `tools/create-dev-token/`, `scripts/grpcurl/` and `scripts/k8s-kind/`; those directories keep a short README pointing here |
 | `cli-user-interface/` | 90 | Hand-written CLI notes plus the generated `markdown/` and `txt/` trees |
+
+**Getting started and Quick start are two different entry points; keep them apart.** *Getting started*
+means understanding the plugin, and leads to `overview.md` (Concepts & Architecture, weight 10) — that is
+where the site's "Get started" button points. *Quick start* means trying it hands-on with no hardware,
+and is `quick-start.md` (weight 15): SoftHSMv3, then `KinD`, in that order. Don't label a quick-start
+link "Get started" or the reverse.
+
+`docs/README.md` is the **Documentation index** (`linkTitle: "Documentation"`, so breadcrumbs stay
+short). It is the docs section's own page, which Hextra's sidebar tree never lists, so it appears at the
+*bottom* of the sidebar through a `[[menu.sidebar]]` entry in `website/hugo.toml` — deliberately below
+the pages readers should meet first.
 
 There is no `usage.md`: it was dissolved into `cli-user-interface/` and the guides. A new subdirectory
 needs its own `_index.md` mount in `website/hugo.toml`.
@@ -161,7 +231,27 @@ needs its own `_index.md` mount in `website/hugo.toml`.
 - Mermaid and FlexSearch are fetched at build time and re-served with SRI hashes, at versions pinned
   in `hugo.toml` — Hextra's default is `mermaid@latest`. `website/README.md` documents the offline
   build.
-- Hugo does **not** need the extended build (Hextra ships precompiled CSS).
+- Hugo does **not** need the extended build (Hextra ships precompiled CSS). The flip side: only
+  utility classes the theme itself uses exist (`hx:sm:flex` does, `hx:md:flex` does not), and an
+  unknown class silently matches nothing. Layout the theme lacks goes in
+  `website/assets/css/custom.css`, which Hextra loads after its own stylesheet.
+- **The "where it fits" diagram exists twice**, in `README.md` and on the site's home page
+  (`website/content/_index.md`, beside the hero text on wide screens): kube-apiserver → **k8s-kms-plugin**
+  → vendor PKCS #11 driver → TPM/HSM, each link labelled with its API or protocol. Change both copies
+  together. It is Mermaid so that it follows light/dark mode on GitHub *and* through the site's theme
+  toggle — so its `%%{init}%%` must never set `theme`, and any colour it hardcodes must read on both
+  backgrounds (the plugin's `#1f6feb` fill with white text does). It is deliberately small and
+  vertical: a left-to-right version shrinks until it can't be read on a phone.
+- **Which version is this page?** A version chip sits beside the navbar title and a
+  "Documentation build" line in the footer gives version, commit, build date and a link to the
+  workflow run. Both read `site.Params.docs{Version,Commit,BuildDate,RunURL,RepoURL}`, which are
+  passed at build time as `HUGO_PARAMS_DOCS*` — by `SITE_VERSION_ENV` in the Makefile and by the
+  Build step in `docs.yml`. Nothing is committed, so nothing can go stale; with no parameters the
+  footer prints "unversioned local build" and the chip disappears rather than showing a wrong
+  version. The footer fills Hextra's `custom/footer.html` **hook**, but the chip needs
+  `_partials/navbar-title.html`, a genuine **override** — Hextra ships an unused
+  `custom/navbar-title.html` that nothing in v0.12.3 calls. That makes three overrides to re-check on
+  a theme upgrade (see below).
 - GitHub-style alerts (`> [!NOTE]`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`) render in **both**
   places — natively on GitHub, through Hextra's blockquote hook on the site — so they are preferred
   over a blockquote opening with an emoji, and the emoji/`**Note**:` label comes off when converting.
@@ -234,32 +324,76 @@ the one that causes bugs: a `CKA_ID` is raw bytes on the token but travels as a 
 every KMS v2 `KeyId` field. There is a compile-time assertion tying `maxCkaIDHexLen` to `maxKMSv2KeyIDSize`;
 keep it intact. Note the annotations budget is *shared* across all annotations (keys included), not per-annotation.
 
-### CLI: Cobra + Viper
+### CLI: Cobra + koanf
 
 `cmd/k8s-kms-plugin/cmd/` holds the root command plus `serve`, `serve rotation`, `docs`, `version`, and PIN entry.
 
-Configuration priority is **CLI flags > env vars > config file > defaults**. Because Viper resolves the values,
+Configuration priority is **CLI flags > env vars > config file > defaults**. Because koanf resolves the values,
 flags are generally registered *without* `Flags().StringVar(&x, …)` — values are read from a per-command
-`ViperFlags*` struct with `mapstructure` tags, not from package variables.
+`*Flags` struct (`ServeFlags`, `RotationFlags`, …) with `koanf` tags, not from package variables. The one
+exception is `--config`, which has to be known before anything else can be resolved.
 
-`viper-patch-sub.go` is essential reading before touching flag plumbing. It works around two upstream quirks:
+`config.go` is essential reading before touching flag plumbing. `resolveCmdConfigE` builds one koanf instance
+per command by layering three providers in increasing priority: the config file subsection for the command
+path, then the environment variables naming a flag that command declares, then `posflag` (which overrides only
+flags the user actually typed, and otherwise fills in defaults). That layering *is* the priority chain — there
+is no equivalent of the old `viper-patch-sub.go`, whose `UnmarshalSubMergedE` existed only because
+`viper.Sub("section")` dropped the chain for a config subsection.
 
-1. `viper.Sub("section")` loses the flag/env/default priority chain entirely, so `UnmarshalSubMergedE` merges
-   the config subsection back into the main Viper config layer before unmarshalling.
-2. Cobra's `MarkFlagsMutuallyExclusive` / `MarkFlagsOneRequired` don't see values that arrived via Viper, so
-   `InitViperSubCmdE` copies resolved Viper values back into the Cobra flags.
+One workaround survives, because it is cobra's rather than the config library's: `MarkFlagsMutuallyExclusive` /
+`MarkFlagsOneRequired` decide from pflag's `Changed` bit, which only the command line sets, so
+`syncFlagsFromConfig` writes values that arrived from the environment or the config file back into the cobra
+flag set. It skips values a user did not provide and values equal to what the flag already carries, so a config
+file restating a default does not mark a flag as set.
 
-Env var names derive from the **command path**: `serve --p11-pin` → `K8S_KMS_PLUGIN_SERVE_P11_PIN`. Config file
-sections mirror the same path (`k8s-kms-plugin.serve`).
+A command resolves only the flags it *declares* (`cmd.LocalFlags()`), not the persistent flags it inherits, so
+each flag has exactly one env var and one config key — the ones of the command it is declared on. `--log-level`
+is a root flag: `K8S_KMS_PLUGIN_LOG_LEVEL` and `k8s-kms-plugin.log-level`, never the `serve` section.
 
-Each command validates all user input in `PersistentPreRunE` via `sanitizeViperFlagsServe` /
-`sanitizeViperFlagsRotation` — that is the single choke point covering flags, env vars *and* config file values.
+Env var names derive from the **command path**: `serve --p11-pin` → `K8S_KMS_PLUGIN_SERVE_P11_PIN`,
+`serve rotation --old-p11-pin` → `K8S_KMS_PLUGIN_SERVE_ROTATION_OLD_P11_PIN`. Config file sections mirror the
+same path (`k8s-kms-plugin.serve`, `k8s-kms-plugin.serve.rotation`).
+
+`cmdConfig.IsSet` distinguishes a key the user configured from one that only carries a flag default — `posflag`
+seeds every unset key with its default, so key *existence* says nothing. `--p11-pin` depends on that
+distinction: an explicitly configured empty PIN is a no-PIN token, an absent one means "prompt".
+
+Each command validates all user input in `PersistentPreRunE` via `sanitizeServeFlags` /
+`sanitizeRotationFlags` — that is the single choke point covering flags, env vars *and* config file values.
 `--algorithm-family` is additionally validated at parse time through a `pflag.Value` implementation, so both
 paths call the same `validateAlgorithmFamily`.
 
 `--p11-key-id` (CKA_ID) and `--p11-key-label` (CKA_LABEL) are mutually exclusive and one is required; same for
 the HMAC pair. `NewP11` resolves whichever was omitted by looking up the other on the token. See
 `docs/cli-user-interface/cka-id-vs-cka-label.md`.
+
+### Help output
+
+`help_theme.go` owns the terminal help: an ANSI theme plus a copy of cobra's usage template. Two rules keep it
+from leaking:
+
+- **Style the rendered text, never the stored strings.** `Short`, `Long`, `Example` and flag usage are read
+  verbatim by shell completion, by `docs` (which bypasses the usage template entirely) and by the generated
+  flag table, so an escape code stored in one of them would reach all three. `TestFlagsBlock_StylingPreservesLayout`
+  is the guard: stripping the escapes must reproduce pflag's output byte for byte.
+- **Style after padding.** `rpad` and `FlagUsages` compute their columns from plain text, so colour goes on
+  last, where zero-width escapes cannot shift a column.
+
+`colorEnabled` honours `NO_COLOR` (presence, not value), `CLICOLOR_FORCE` and a non-terminal stdout;
+`helpWidth` wraps flag usage to the terminal, capped at 110 columns, falling back to `COLUMNS`. The template
+deliberately puts the subcommand list *before* the examples so `serve rotation` is visible on the first screen
+of `serve --help`, and ends with one footer line about env vars and config keys — which is why individual
+usage strings must not grow `Env var: …` suffixes back.
+
+`completion.go` classifies every flag for the shell: `registerFixedCompletion` for closed value sets,
+`registerNoFileCompletion` for opaque values (PINs, labels, hex IDs), `markFlagFilename` / `markFlagDirname`
+for paths. Without a classification cobra offers file names, which is wrong for most flags here. The mark
+helpers pick between the local and persistent flag set themselves — `Command.Flags()` holds only local flags at
+registration time, so marking a persistent flag through it fails with "no such flag".
+
+`silenceUsage(cmd)` at the top of a `RunE` stops cobra from answering a *runtime* failure with the whole usage
+screen; everything cobra validates before `RunE` (flag parsing, required flags, flag groups) still prints it.
+`rootCmd` sets `SilenceErrors` so `Execute` prints the error exactly once, on stderr.
 
 Config file discovery does **not** include `/etc`: it is `--config`, then `K8S_KMS_PLUGIN_CONFIG`, then
 `k8s-kms-plugin.conf.yaml` in `$HOME` or `$HOME/.config/k8s-kms-plugin/`. The packaged example therefore has to
@@ -279,8 +413,8 @@ user-facing deliverables rather than samples:
 The two `configs/` files had rotted badly and were repaired; keep them honest, because nothing
 else does:
 
-- **Viper ignores an unknown config key silently.** A stale key does not error — it leaves the setting at its
-  default. `algorithm:` (renamed to `algorithm-family:`) was quietly forcing every reader's KEK to `aes-gcm`.
+- **An unknown config key is ignored silently.** This was true of Viper and is still true of koanf: a stale key
+  does not error — it leaves the setting at its default. `algorithm:` (renamed to `algorithm-family:`) was quietly forcing every reader's KEK to `aes-gcm`.
   Every key in the example must be one the CLI actually accepts; verify by running
   `dist/k8s-kms-plugin --config configs/config.example.yaml serve` and confirming it reaches the PKCS#11
   library load rather than a validation error.

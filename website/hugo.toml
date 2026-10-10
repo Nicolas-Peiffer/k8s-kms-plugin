@@ -16,13 +16,13 @@
 #   make site-serve    # http://localhost:1313/k8s-kms-plugin/
 #   make site          # -> website/public/
 
-# baseURL is only the local-dev default — the fork this branch is developed on. Do NOT rely on it
-# being right for whoever publishes: the Docs workflow computes the URL from the owner and
-# repository actually running the build and passes it with --baseURL, so the same config publishes
-# correctly from this fork and from eclipse-keysealer upstream with nothing to remember.
+# baseURL is only the local-dev default. Do NOT rely on it being right for whoever publishes: the
+# Docs workflow computes the URL from the owner and repository actually running the build and passes
+# it with --baseURL, so the same config publishes correctly from this repository and from any fork
+# with nothing to remember.
 #
 # Override it locally the same way:  hugo --baseURL https://example.github.io/k8s-kms-plugin/
-baseURL = 'https://nicolas-peiffer.github.io/k8s-kms-plugin/'
+baseURL = 'https://eclipse-keysealer.github.io/k8s-kms-plugin/'
 title = 'k8s-kms-plugin'
 locale = 'en-us'
 
@@ -225,3 +225,13 @@ disableKinds = ['taxonomy', 'term']
     weight = 3
     [menu.main.params]
       icon = 'github'
+
+  # The documentation index is the docs section's own page (docs/README.md, mounted above as
+  # content/docs/_index.md), and Hextra's sidebar tree lists only the pages INSIDE a section, never
+  # the section itself — so without this entry the index is missing from the sidebar entirely.
+  # menu.sidebar renders below the page tree, which is where the index belongs: reachable from every
+  # page, but after Concepts & Architecture (where readers get started) and the Quick start.
+  [[menu.sidebar]]
+    name = 'Documentation index'
+    pageRef = '/docs'
+    weight = 1

@@ -54,7 +54,6 @@ Findings land in the repository's **Security** tab (SARIF), without blocking the
 | [`security.yaml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/.github/workflows/security.yaml)        | `govulncheck` (Go vuln DB), **CodeQL** (Go `security-extended` queries), **Trivy** filesystem scan (Go modules & Containerfiles) and Trivy image scan of the image built by `make image` from the [`Containerfile`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/Containerfile) |
 | [`lint.yml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/.github/workflows/lint.yml)                  | `golangci-lint` — the same static analysis as `make lint`                                  |
 | [`ci.yml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/.github/workflows/ci.yml)                      | `go vet`, build and test                                                                   |
-| [`secret-scan.yml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/.github/workflows/secret-scan.yml)    | Detects credentials accidentally committed to the repository                               |
 | [`scorecard.yml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/.github/workflows/scorecard.yml)        | [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/eclipse-keysealer/k8s-kms-plugin) — rates supply-chain posture (branch protection, token permissions, pinned dependencies, dangerous workflow patterns). The badge in the [project README](https://github.com/eclipse-keysealer/k8s-kms-plugin#k8s-kms-plugin-) reflects the latest run |
 | [`dependabot.yml`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/.github/dependabot.yml)                | Weekly update PRs for **Go modules**, **GitHub Actions** and **Docker base images**; security updates are raised as individual PRs |
 
@@ -108,7 +107,7 @@ Download the artifact together with its `-keyless.bundle.json` file from the
 [releases page](https://github.com/eclipse-keysealer/k8s-kms-plugin/releases), then:
 
 ```bash
-TAG=v1.0.0
+TAG=v1.0.0-rc5
 VERSION=${TAG#v}                              # goreleaser strips the leading "v"
 FILE=k8s-kms-plugin_linux_amd64_${VERSION}
 
@@ -144,7 +143,7 @@ gh attestation verify "k8s-kms-plugin-${VERSION}-source.tar.gz.spdx.json" \
 Verify the image signature (replace the tag, or pin a digest with `@sha256:…`):
 
 ```bash
-TAG=v1.0.0
+TAG=v1.0.0-rc5
 IMAGE=ghcr.io/eclipse-keysealer/k8s-kms-plugin:${TAG}
 
 cosign verify "${IMAGE}" \
@@ -161,11 +160,11 @@ produced this artifact* — and is checked with
 go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@v2.7.1
 ```
 
-For a downloaded binary, using the `*.intoto.jsonl` published alongside it:
+For a downloaded binary, using the `multiple.intoto.jsonl` published alongside it:
 
 ```bash
 slsa-verifier verify-artifact "${FILE}" \
-  --provenance-path "$(ls *.intoto.jsonl | head -1)" \
+  --provenance-path multiple.intoto.jsonl \
   --source-uri github.com/eclipse-keysealer/k8s-kms-plugin \
   --source-tag "${TAG}"
 ```

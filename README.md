@@ -6,15 +6,13 @@
      why the shields.io equivalents are used instead. The two rows are deliberate: what the project
      is, then whether it is healthy.
 
-     FORK-LOCAL: the documentation badge and the docs workflow badge below, and the site links in the
-     Documentation section, point at THIS FORK because upstream has no Pages site and no docs.yml
-     workflow yet. Everything else in this repository uses absolute eclipse-keysealer URLs on purpose.
+     FORK-LOCAL: the documentation badge and the Docs workflow badge below, and the two site links in
+     the Documentation section, point at THIS FORK's own Pages site so they track what the fork
+     publishes. Everything else in this file uses absolute eclipse-keysealer URLs on purpose.
 
      BEFORE OPENING A PULL REQUEST UPSTREAM, switch them back:
        nicolas-peiffer.github.io/k8s-kms-plugin -> eclipse-keysealer.github.io/k8s-kms-plugin
-       github.com/Nicolas-Peiffer/...           -> github.com/eclipse-keysealer/...
-     The other place carrying a fork URL is website/hugo.toml's baseURL, which is only a local-dev
-     default — the Docs workflow computes the real one from the repository that runs the build. -->
+       github.com/Nicolas-Peiffer/...           -> github.com/eclipse-keysealer/... -->
 [![Documentation](https://img.shields.io/badge/documentation-online-1f6feb?style=flat-square&logo=hugo&logoColor=white)](https://nicolas-peiffer.github.io/k8s-kms-plugin/)
 [![Licence](https://img.shields.io/github/license/eclipse-keysealer/k8s-kms-plugin?style=flat-square&logo=opensourceinitiative&logoColor=white&color=1f6feb)](./LICENSE)
 [![Go Reference](https://img.shields.io/badge/pkg.go.dev-reference-007d9c?style=flat-square&logo=go&logoColor=white)](https://pkg.go.dev/github.com/eclipse-keysealer/k8s-kms-plugin)
@@ -23,13 +21,29 @@
 
 [![Build](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/ci.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=build)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/ci.yml)
 [![Lint](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/lint.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=lint)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/lint.yml)
-[![Secret scan](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/secret-scan.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=secret%20scan)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/secret-scan.yml)
 [![Release build](https://img.shields.io/github/actions/workflow/status/eclipse-keysealer/k8s-kms-plugin/release.yml?style=flat-square&logo=githubactions&logoColor=white&label=release%20build)](https://github.com/eclipse-keysealer/k8s-kms-plugin/actions/workflows/release.yml)
 [![Docs site](https://img.shields.io/github/actions/workflow/status/Nicolas-Peiffer/k8s-kms-plugin/docs.yml?branch=master&style=flat-square&logo=githubactions&logoColor=white&label=docs)](https://github.com/Nicolas-Peiffer/k8s-kms-plugin/actions/workflows/docs.yml)
 [![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/eclipse-keysealer/k8s-kms-plugin?style=flat-square&logo=openssf&logoColor=white&label=openssf%20scorecard)](https://scorecard.dev/viewer/?uri=github.com/eclipse-keysealer/k8s-kms-plugin)
 
 `k8s-kms-plugin serve` implements the [Kubernetes KMS v2 API](https://pkg.go.dev/k8s.io/kms/apis/v2) protocol as a gRPC service that leverages a remote or local HSM via PKCS11.
 `k8s-kms-plugin serve rotation` supports key rotation operations.
+
+<!-- The same diagram is on the documentation site's home page (website/content/_index.md); change
+     both together. It sets no Mermaid theme on purpose, so GitHub and the site can each draw it in
+     light or dark mode; the plugin's blue fill and white text were chosen to read on both. -->
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 32, "padding": 8}}}%%
+flowchart TB
+    K8S["kube-apiserver"]
+    PLG(["k8s-kms-plugin"])
+    DRV["vendor PKCS #11 driver"]
+    HSM{{"TPM / HSM · KEK"}}
+    K8S <-->|"KMS v2 API<br/>gRPC over a plaintext<br/>unix socket"| PLG
+    PLG <-->|"PKCS #11 C API<br/>up to v3.2"| DRV
+    DRV <-->|"USB · network · TPM"| HSM
+    classDef main fill:#1f6feb,stroke:#1f6feb,color:#fff,font-weight:bold,font-size:18px
+    class PLG main
+```
 
 Supported `--algorithm-family` values (key size / parameter set is derived at runtime from the HSM key):
 
@@ -44,7 +58,7 @@ operations run inside the HSM — see [Cryptographic Schemes](./docs/cryptograph
 This plugin will also run in proxy mode which can connect to a remote plugin service running in a secure network device (Key Managers)
 
 > [!IMPORTANT]
-> **Droping support of KMS v1**: Newer (after 2025) version of the `k8s-kms-plugin` droped support for [Kubernetes KMSv1](https://pkg.go.dev/k8s.io/kms@v0.34.1/apis/v1beta1),
+> **Droping support of KMS v1**: Newer (after 2025) version of the `k8s-kms-plugin` droped support for [Kubernetes KMSv1](https://pkg.go.dev/k8s.io/kms/apis/v1beta1),
 > as KMSv1 is deprecated in Kubernetes v1.28 and disabled by default since Kubernetes v1.29.
 
 > [!NOTE]
@@ -56,7 +70,7 @@ This plugin will also run in proxy mode which can connect to a remote plugin ser
 `k8s-kms-plugin` is part of [Eclipse KeySealer](https://projects.eclipse.org/projects/technology.keysealer),
 which brings HSM-backed key management to Kubernetes. It relies on [crypto11](https://github.com/eclipse-keypont/crypto11), [gose](https://github.com/eclipse-keypont/gose)
 and [pkcs11-go](https://github.com/eclipse-keypont/pkcs11-go) from the related
-[Eclipse Keypont](https://projects.eclipse.org/projects/technology.keypont) project for its PKCS#11 bindings. _"Pont"_ is french for "bridge"
+[Eclipse KeyPont](https://projects.eclipse.org/projects/technology.keypont) project for its PKCS#11 bindings. _"Pont"_ is french for "bridge"
 
 # 🚤 Quick Start 🚀
 
@@ -66,8 +80,11 @@ throwaway Kubernetes cluster:
 1. [SoftHSMv3 (`pqctoday-hsm`) & `k8s-kms-plugin`](./docs/hsm-guides/softhsm-v3.md) — **recommended** HSM: supports all algorithm families including ML-KEM
 2. [`KinD` & `k8s-kms-plugin`](./docs/kubernetes-guides/kind-kubernetes.md) — **recommended** cluster: single-node Kubernetes on Podman or Docker, deleted in one command
 
+The [Quick start](./docs/quick-start.md) page has the same two steps and where to go once they work. To
+*understand* the plugin before trying it, get started with [Concepts & Architecture](./docs/overview.md) instead.
+
 Other HSMs and TPMs (Thales eToken Fusion, YubiHSM 2, SoftHSMv2, TPM emulator), and the other
-Kubernetes distribution guide (`k3s`), are indexed in [`docs/README.md`](./docs/README.md).
+Kubernetes distribution guide (`k3s`), are listed in the [documentation index](./docs/README.md).
 
 # Documentation 📚
 

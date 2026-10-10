@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Thales Group and the k8s-kms-plugin Contributors
 # SPDX-License-Identifier: MIT
 
-.PHONY: all lint lint-fix vet govulncheck glossary glossary-check check-doc-links check-site site site-serve site-clean build build-linux-amd64 build-linux-amd64-debug build-linux-arm64 build-linux-arm64-debug build-linux-riscv64 build-linux-riscv64-debug coverage test test-integration test-e2e fuzz doc notices image image-from-source release release-local-test get-ldflags clean
+.PHONY: all lint lint-fix vet gosec govulncheck glossary glossary-check check-doc-links check-site site site-serve site-clean build build-linux-amd64 build-linux-amd64-debug build-linux-arm64 build-linux-arm64-debug build-linux-riscv64 build-linux-riscv64-debug coverage test test-integration test-e2e fuzz doc notices image image-from-source release release-local-test get-ldflags check-version clean
 
 all: build-linux-amd64 build-linux-arm64 build-linux-riscv64
 
@@ -11,12 +11,35 @@ GO_MODULE_NAME := "github.com/eclipse-keysealer/$(PROJECT_NAME)"
 BINARY_NAME = $(PROJECT_NAME)
 
 # Useful variables for build metadata
-VERSION ?= $(shell git describe --tags --always --dirty)
+#
+# SECURITY: every value below is interpolated into shell recipes (ldflags, file
+# names, image tags), so it must never contain shell metacharacters. VERSION in
+# particular is attacker-influenced: anyone who can create a git tag controls
+# its content, and git allows shell metacharacters (backticks, $(), ;, |, &,
+# quotes, ...) in tag names. The raw git output is therefore sanitized inside a
+# single shell invocation — it never becomes a make variable, so make can never
+# re-expand attacker content as $(...) syntax — and reduced to the strict
+# [A-Za-z0-9._+-] character set that is safe in shell commands, file names and
+# -ldflags values. A warning is printed if any character had to be stripped.
+VERSION ?= $(shell \
+	raw="$$(git describe --tags --always --dirty 2>/dev/null)"; \
+	[ -n "$$raw" ] || raw="unknown"; \
+	safe="$$(printf '%s' "$$raw" | tr -cd 'A-Za-z0-9._+-')"; \
+	[ -n "$$safe" ] || safe="unknown"; \
+	[ "$$safe" = "$$raw" ] || echo "make: warning: git tag [$$raw] contains characters unsafe for build metadata; using [$$safe]" >&2; \
+	printf '%s' "$$safe" \
+)
 # equivalent command to test git dirty status in bash terminal: [[ -n "$(git status --porcelain)" ]] && echo "true" || echo "false"
 IS_GIT_DIRTY := $(shell [ -n "$$(git status --porcelain)" ] && echo "true" || echo "false")
-COMMIT_LONG ?= $(shell git rev-parse HEAD)
-COMMIT_SHORT ?= $(shell git rev-parse --short=8 HEAD)
-COMMIT_TIMESTAMP := $(shell git show -s --format=%cI HEAD)
+# Commit hashes are hex by construction, but they are git-controlled and flow
+# into the same -ldflags, so they are sanitized too (defense in depth).
+COMMIT_LONG ?= $(shell git rev-parse HEAD 2>/dev/null | tr -cd 'A-Za-z0-9')
+COMMIT_SHORT ?= $(shell git rev-parse --short=8 HEAD 2>/dev/null | tr -cd 'A-Za-z0-9')
+# %cI is a normalized ISO-8601 timestamp; keep only its safe characters.
+COMMIT_TIMESTAMP := $(shell git show -s --format=%cI HEAD 2>/dev/null | tr -cd 'A-Za-z0-9._+-:')
+# The remaining values come from trusted local commands (go, uname, date) and
+# are safe by construction. GO_VERSION intentionally contains spaces, which are
+# preserved inside the single-quoted -X values.
 GO_VERSION ?= $(shell go version)
 BUILD_PLATFORM  ?= $(shell uname -m)
 BUILD_DATE ?= $(shell date -u --iso-8601=seconds)
@@ -107,6 +130,19 @@ GOVULNCHECK ?= govulncheck
 govulncheck:
 		$(call require,$(GOVULNCHECK),go install golang.org/x/vuln/cmd/govulncheck@latest)
 		CGO_ENABLED=$(CGO_ENABLED) $(GOVULNCHECK) -show verbose ./...
+
+## Security scan
+# Runs gosec (https://github.com/securego/gosec) — a static-analysis security
+# scanner for Go code. Complements govulncheck (dependency CVEs) by flagging
+# insecure code patterns in this module itself.
+#
+# Install gosec:
+#   go install github.com/securego/gosec/v2/cmd/gosec@latest
+GOSEC ?= gosec
+
+gosec:
+		$(call require,$(GOSEC),go install github.com/securego/gosec/v2/cmd/gosec@latest)
+		CGO_ENABLED=$(CGO_ENABLED) $(GOSEC) ./...
 
 ## SAST
 coverage:
@@ -209,9 +245,22 @@ HUGO ?= hugo
 HUGO_INSTALL_HINT := go install github.com/gohugoio/hugo@latest
 SITE_DIR := website
 
+# The documentation's own version, shown in the navbar and the footer of every published page.
+# Passed as build-time parameters rather than committed anywhere, so nothing can go stale: a page
+# claiming the wrong version is worse than one that says it does not know. A build with none of these
+# set renders "unversioned local build" instead of a blank or a lie — see
+# website/layouts/_partials/custom/footer.html.
+#
+# HUGO_PARAMS_<NAME> is Hugo's env-var route into site params; the lookup is case-insensitive, so
+# HUGO_PARAMS_DOCSVERSION reaches site.Params.docsVersion.
+SITE_VERSION_ENV = \
+	HUGO_PARAMS_DOCSVERSION="$(VERSION)" \
+	HUGO_PARAMS_DOCSCOMMIT="$(COMMIT_LONG)" \
+	HUGO_PARAMS_DOCSBUILDDATE="$(BUILD_DATE)"
+
 site:
 		$(call require,$(HUGO),$(HUGO_INSTALL_HINT))
-		cd $(SITE_DIR) && $(HUGO) --gc --minify
+		cd $(SITE_DIR) && $(SITE_VERSION_ENV) $(HUGO) --gc --minify
 		@$(MAKE) --no-print-directory check-site
 		@echo "Site built in $(SITE_DIR)/public"
 
@@ -223,7 +272,7 @@ check-site:
 
 site-serve:
 		$(call require,$(HUGO),$(HUGO_INSTALL_HINT))
-		cd $(SITE_DIR) && $(HUGO) server --buildDrafts
+		cd $(SITE_DIR) && $(SITE_VERSION_ENV) $(HUGO) server --buildDrafts
 
 # Removes the build output and Hugo's module/resource caches.
 site-clean:
@@ -326,6 +375,17 @@ release:
 
 get-ldflags:
 		@echo "$(GIT_INFO_LDFLAGS) -s -w"
+
+# Fail if the current git tag contains characters that the VERSION sanitization
+# above would strip. The build targets sanitize and warn; this target turns the
+# same condition into a hard error, so CI can reject a malicious tag outright.
+check-version:
+		@raw="$$(git describe --tags --always --dirty 2>/dev/null)"; \
+		safe="$$(printf '%s' "$$raw" | tr -cd 'A-Za-z0-9._+-')"; \
+		if [ "$$safe" != "$$raw" ]; then \
+			echo "error: git tag '$$raw' contains characters unsafe for build metadata" >&2; \
+			exit 1; \
+		fi
 
 ## Clean
 clean:

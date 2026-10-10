@@ -1,13 +1,21 @@
 ---
-title: "Documentation"
+title: "Documentation index"
+# The breadcrumb above every page reads linkTitle, so it keeps the shorter "Documentation".
+linkTitle: "Documentation"
 ---
 
-This folder is the documentation index for [`k8s-kms-plugin`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md). Start here when looking for a guide;
-the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md) is a short front door that links back here.
+This folder is the documentation index for [`k8s-kms-plugin`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md): come here when looking for a
+specific guide. The main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/README.md) is a short front door that links back here.
+
+There are two ways in, depending on what you want first:
+
+- **Getting started** — to *understand* the plugin, read [Concepts & Architecture](./overview.md).
+- **Quick start** — to *try* it in a few minutes with no hardware, follow the [Quick start](./quick-start.md):
+  SoftHSMv3, then `KinD`.
 
 > [!NOTE]
 > **Rendering**: these pages are rendered both by GitHub and by the documentation site
-> ([Hugo + Hextra](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/website)), which publishes `docs/` and nothing else. Three link
+> ([Hugo + Hextra](https://github.com/eclipse-keysealer/k8s-kms-plugin/tree/master/website)), which publishes `docs/` and nothing else. Four link
 > conventions keep them working in both places:
 >
 > - **between documentation pages** — always **relative** to the `.md` file (`./installation.md`).
@@ -19,6 +27,10 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 >   A page becomes a *directory* URL on the site, so a relative link to a plain file beside it
 >   resolves one level too deep. Images are the exception: keep those relative, since Hugo's image
 >   render hook resolves them.
+> - **to a Go package on pkg.go.dev** — never pin a module version. `https://pkg.go.dev/k8s.io/kms/apis/v2`
+>   follows the module; inserting an `@<version>` freezes the link at whatever release was current the
+>   day it was written, and nothing updates it on a dependency bump. `make check-doc-links` fails on a
+>   pinned URL, in Markdown and in Go doc comments alike.
 >
 > Headings carry **no manual section numbers**: a generator derives ordering and the table of contents from the
 > document tree, and hand-written numbers drift out of sync with the anchors pointing at them. Run
@@ -26,8 +38,8 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 > `make check-site`) to confirm the published output still resolves.
 
 - [Where to Find What](#where-to-find-what)
-- [Getting started](#getting-started)
 - [Concepts & architecture](#concepts--architecture)
+- [Quick start](#quick-start)
 - [Cryptographic reference](#cryptographic-reference)
 - [HSM \& TPM guides](#hsm--tpm-guides)
 - [Kubernetes integration guides](#kubernetes-integration-guides)
@@ -40,7 +52,8 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 
 | I want to…                                                 | Go to |
 |------------------------------------------------------------|-------|
-| Get something running in a few minutes                     | [Quick start](#getting-started) below — SoftHSMv3, then `KinD` |
+| Get started: understand what the plugin is and where it sits | [Concepts & Architecture](./overview.md) |
+| Try it hands-on in a few minutes, with no hardware          | [Quick start](./quick-start.md) — SoftHSMv3, then `KinD` |
 | Set up an HSM, a TPM or a software HSM                      | [HSM & TPM guides](./hsm-guides/README.md) |
 | Know which algorithm families were tested on my device      | [HSM & TPM Supported Platforms](./hsm-guides/README.md#hsm--tpm-supported-platforms) |
 | Make a Kubernetes cluster use the plugin                    | [Kubernetes integration guides](./kubernetes-guides/README.md) |
@@ -53,23 +66,7 @@ the main [`README.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/
 | Debug the plugin                                            | [Debug Environment](./development.md#debug-environment-) |
 | Verify a release's signature or SLSA provenance             | [Supply Chain Security](./supply-chain-security.md) |
 | Look up an acronym or a term                                | [Glossary](./glossary.md) |
-
-## Getting started
-
-**Quick start** — two steps, no hardware needed. Do them in order:
-
-| Step | Guide | What you get |
-|------|-------|--------------|
-| 1 | [SoftHSMv3 (`pqctoday-hsm`)](./hsm-guides/softhsm-v3.md) | A software PKCS #11 provider with a key per algorithm family, and `k8s-kms-plugin serve` running against it — including ML-KEM |
-| 2 | [`KinD`](./kubernetes-guides/kind-kubernetes.md) | A single-node Kubernetes cluster encrypting its Secrets through that plugin, deleted again in one command |
-
-Then, as you need them:
-
-| Page | What it covers |
-|------|----------------|
-| [Installation](./installation.md) | Getting a release binary or package, verifying it, `go install`, building from source, container images |
-| [Glossary](./glossary.md) | Every acronym and term used here, from DEK and KEK to ML-KEM's encapsulation key |
-| [`CHANGELOG.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/CHANGELOG.md) | Release history |
+| See what changed between releases                           | [`CHANGELOG.md`](https://github.com/eclipse-keysealer/k8s-kms-plugin/blob/master/CHANGELOG.md) |
 
 ## Concepts & architecture
 
@@ -79,6 +76,15 @@ TPM or HSM. The apiserver derives the DEK and encrypts the object itself.
 
 → **[Concepts & Architecture](./overview.md)** for the terminology, that flow drawn out, the
 deployment topologies (single node and HA across three servers), and how key rotation works.
+This is where to get started.
+
+## Quick start
+
+Two steps, no hardware needed: a [SoftHSMv3](./hsm-guides/softhsm-v3.md) software HSM with
+`k8s-kms-plugin serve` running against it, then a throwaway [`KinD`](./kubernetes-guides/kind-kubernetes.md)
+cluster encrypting its Secrets through it.
+
+→ **[Quick start](./quick-start.md)** for the two steps in order, and where to go once they work.
 
 ## Cryptographic reference
 
@@ -114,6 +120,7 @@ Tested and documented so far:
 | Software TPM Emulator (`swtpm`) | TPM | Software | none yet — no ML-KEM support | [Guide](./hsm-guides/software-tpm-emulator.md) |
 | Thales eToken Fusion | HSM | Hardware USB | RSA-OAEP | [Guide](./hsm-guides/thales-etoken-fusion.md) |
 | Yubico YubiHSM 2 | HSM | Hardware USB | RSA-OAEP | [Guide](./hsm-guides/yubico-yubihsm2.md) |
+| Thales Luna HSM | HSM | Network, cloud | none yet — integration documented by Thales | [Guide](./hsm-guides/thales-luna-hsm.md) |
 
 **SoftHSMv3 is the one to start with** — it is the only provider here that covers every algorithm
 family, and it needs no hardware.

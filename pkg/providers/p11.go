@@ -23,7 +23,6 @@ import (
 	"github.com/eclipse-keypont/gose/hsm"
 	"github.com/eclipse-keypont/gose/jose"
 	pkcs11 "github.com/eclipse-keypont/pkcs11-go/cryptoki"
-	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -101,7 +100,6 @@ type P11 struct {
 	mu sync.RWMutex
 
 	// active KEK parameters
-	createKey       bool                         // Indicates whether the k8s-kms-plugin should create a new key. TODO: explain the use case of when should the k8s-kms-plugin create the key, or create a new cobra command
 	config          *crypto11.Config             // Active configuration for the crypto11 library
 	ctx             *crypto11.Context            // Active cryptographic context for key operations
 	encryptors      map[string]gose.JweEncryptor // Active Map of JWE encryptors used for encryption operations
@@ -128,10 +126,6 @@ type P11 struct {
 //
 // The P11 instance is configured with the given crypto11.Config.
 //
-// The createKey argument is a boolean that indicates whether the P11 instance
-// should create a default key with the given label. TODO: explain the use case
-// when this would be needed, eventually move this to a new command.
-//
 // The kekkeyid argument is the Key Encryption Key (KEK) identifier.
 // This is the PKCS #11 CKA_ID.
 //
@@ -149,7 +143,6 @@ type P11 struct {
 func NewP11(
 	// active KEK parameters
 	config *crypto11.Config,
-	createKey bool,
 	kekkeyid string,
 	k8sKekLabel string,
 	hmacKeyLabel string,
@@ -168,7 +161,6 @@ func NewP11(
 	p = &P11{
 		// active KEK parameters
 		config:          config,
-		createKey:       createKey,
 		algorithmFamily: algorithm,
 
 		// only in case of key rotation
@@ -286,31 +278,6 @@ func NewP11(
 		}
 	}
 
-	if p.createKey {
-		if p.algorithmFamily == AlgMLKEM {
-			// ML-KEM key pairs must be provisioned separately on the HSM; auto-create is not supported.
-			slog.Warn("NewP11: --auto-create is not supported for ml-kem; ML-KEM key pair must be created separately on the HSM")
-		} else {
-			// Check if the default key exists - if not, create it
-			var foundDefaultDek *crypto11.SecretKey
-			if foundDefaultDek, err = p.ctx.FindKey(p.kekCkaID, p.GetKekCkaLabelByteA()); nil != err {
-				return
-			}
-			if nil == foundDefaultDek {
-				var newDekUUID uuid.UUID
-				if newDekUUID, err = uuid.NewRandom(); nil != err {
-					return
-				}
-				var uuidBytes []byte
-				if uuidBytes, err = newDekUUID.MarshalText(); nil != err {
-					return
-				}
-				if _, err = p.ctx.GenerateSecretKeyWithLabel(uuidBytes, p.GetKekCkaLabelByteA(), 256, crypto11.CipherAES); nil != err {
-					return
-				}
-			}
-		}
-	}
 	return
 }
 
@@ -694,6 +661,11 @@ func (p *P11) decryptWithContext(req *k8skmsv2.DecryptRequest, isRotation bool) 
 			if blockMode, err = kek.NewCBCDecrypterCloser(iv); err != nil {
 				return nil, fmt.Errorf("error initializing block cipher: %w", err)
 			}
+			// !!! It is very important to finalize each PKCS11 operation.
+			// Deferred immediately, for the reason given in Encrypt: an error between here
+			// and the HMAC setup would otherwise strand an active C_DecryptInit on the
+			// session and poison every subsequent operation with CKR_OPERATION_ACTIVE.
+			defer blockMode.Close()
 
 			cbcKey := gose.NewAesCbcCryptor(blockMode, req.GetKeyId(), jose.AlgA256CBC)
 			// Initialize the hmac key for authentication
@@ -708,8 +680,6 @@ func (p *P11) decryptWithContext(req *k8skmsv2.DecryptRequest, isRotation bool) 
 			hmacKey := gose.NewHmacShaCryptor(actualHmacCkaLabel, hash)
 			// decryptor
 			decryptor = gose.NewJweDirectDecryptorBlock(cbcKey, hmacKey)
-			// !!! It is very important to finalize each PKCS11 operation
-			defer blockMode.Close()
 
 			if out, aad, err = decryptor.Decrypt(string(req.GetCiphertext())); err != nil {
 				slog.Error("error during decryption", "error", err)
@@ -848,6 +818,12 @@ func (p *P11) Encrypt(ctx context.Context, req *k8skmsv2.EncryptRequest) (resp *
 			if blockMode, err = kek.NewCBCEncrypterCloser(iv); err != nil {
 				return nil, fmt.Errorf("error initializing block cipher: %w", err)
 			}
+			// !!! It is very important to finalize each PKCS11 operation.
+			// Deferred immediately after the operation is opened, not after the HMAC key is
+			// set up: PKCS#11 allows one active operation per session, so any error return
+			// between the two would otherwise leave C_EncryptInit active and every later
+			// operation on this session would fail with CKR_OPERATION_ACTIVE.
+			defer blockMode.Close()
 			// jose.AlgA256CBC is the only standardized JWE AES-CBC key size (unlike AES-GCM
 			// which exists as AlgA128GCM / AlgA192GCM / AlgA256GCM). The key on the HSM must be 256-bit.
 			cbcKey := gose.NewAesCbcCryptor(blockMode, p.GetKekKeyIDString(), jose.AlgA256CBC)
@@ -864,8 +840,6 @@ func (p *P11) Encrypt(ctx context.Context, req *k8skmsv2.EncryptRequest) (resp *
 			hmacKey := gose.NewHmacShaCryptor(p.hmacCkaLabel, hash)
 			// encryptor
 			encryptor = gose.NewJweDirectEncryptorBlock(cbcKey, hmacKey, iv)
-			// !!! It is very important to finalize each PKCS11 operation
-			defer blockMode.Close()
 			// output is the marshalled jwe
 			if out, err = encryptor.Encrypt(req.GetPlaintext(), nil); err != nil {
 				slog.Error("Encrypt: encryption failed", "error", err)
@@ -1013,9 +987,9 @@ func (p *P11) UnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.Una
 // The returned StatusResponse contains the KeyID of the KEK (CKA_ID), the Healthz and the Version.
 //
 // Status() method comes from the KeyManagementServiceClient interface from "k8s.io/kms/apis/v2"
-// See https://pkg.go.dev/k8s.io/kms@v0.31.3/apis/v2#KeyManagementServiceClient
+// See https://pkg.go.dev/k8s.io/kms/apis/v2#KeyManagementServiceClient
 // Also check the content of a StatusResponse
-// See https://pkg.go.dev/k8s.io/kms@v0.31.3/apis/v2#StatusResponse
+// See https://pkg.go.dev/k8s.io/kms/apis/v2#StatusResponse
 func (p *P11) Status(ctx context.Context, _ *k8skmsv2.StatusRequest) (statusResponse *k8skmsv2.StatusResponse, err error) {
 	slog.Log(ctx, logging.LevelTrace, "p11 Status: entering method")
 
