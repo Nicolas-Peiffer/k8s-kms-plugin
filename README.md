@@ -28,6 +28,23 @@
 `k8s-kms-plugin serve` implements the [Kubernetes KMS v2 API](https://pkg.go.dev/k8s.io/kms/apis/v2) protocol as a gRPC service that leverages a remote or local HSM via PKCS11.
 `k8s-kms-plugin serve rotation` supports key rotation operations.
 
+<!-- The same diagram is on the documentation site's home page (website/content/_index.md); change
+     both together. It sets no Mermaid theme on purpose, so GitHub and the site can each draw it in
+     light or dark mode; the plugin's blue fill and white text were chosen to read on both. -->
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 32, "padding": 8}}}%%
+flowchart TB
+    K8S["kube-apiserver"]
+    PLG(["k8s-kms-plugin"])
+    DRV["vendor PKCS #11 driver"]
+    HSM{{"TPM / HSM · KEK"}}
+    K8S <-->|"KMS v2 API<br/>gRPC · unix socket"| PLG
+    PLG <-->|"PKCS #11 C API"| DRV
+    DRV <-->|"USB · network · TPM"| HSM
+    classDef main fill:#1f6feb,stroke:#1f6feb,color:#fff,font-weight:bold,font-size:18px
+    class PLG main
+```
+
 Supported `--algorithm-family` values (key size / parameter set is derived at runtime from the HSM key):
 
 - `aes-gcm` — AES-GCM symmetric encryption (128 / 192 / 256-bit)

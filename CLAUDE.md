@@ -231,7 +231,17 @@ needs its own `_index.md` mount in `website/hugo.toml`.
 - Mermaid and FlexSearch are fetched at build time and re-served with SRI hashes, at versions pinned
   in `hugo.toml` — Hextra's default is `mermaid@latest`. `website/README.md` documents the offline
   build.
-- Hugo does **not** need the extended build (Hextra ships precompiled CSS).
+- Hugo does **not** need the extended build (Hextra ships precompiled CSS). The flip side: only
+  utility classes the theme itself uses exist (`hx:sm:flex` does, `hx:md:flex` does not), and an
+  unknown class silently matches nothing. Layout the theme lacks goes in
+  `website/assets/css/custom.css`, which Hextra loads after its own stylesheet.
+- **The "where it fits" diagram exists twice**, in `README.md` and on the site's home page
+  (`website/content/_index.md`, beside the hero text on wide screens): kube-apiserver → **k8s-kms-plugin**
+  → vendor PKCS #11 driver → TPM/HSM, each link labelled with its API or protocol. Change both copies
+  together. It is Mermaid so that it follows light/dark mode on GitHub *and* through the site's theme
+  toggle — so its `%%{init}%%` must never set `theme`, and any colour it hardcodes must read on both
+  backgrounds (the plugin's `#1f6feb` fill with white text does). It is deliberately small and
+  vertical: a left-to-right version shrinks until it can't be read on a phone.
 - **Which version is this page?** A version chip sits beside the navbar title and a
   "Documentation build" line in the footer gives version, commit, build date and a link to the
   workflow run. Both read `site.Params.docs{Version,Commit,BuildDate,RunURL,RepoURL}`, which are
