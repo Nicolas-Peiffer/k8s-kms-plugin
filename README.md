@@ -39,7 +39,7 @@ flowchart TB
     DRV["vendor PKCS #11 driver"]
     HSM{{"TPM / HSM · KEK"}}
     K8S <-->|"KMS v2 API<br/>gRPC over a plaintext<br/>unix socket"| PLG
-    PLG <-->|"PKCS #11 C API"| DRV
+    PLG <-->|"PKCS #11 C API<br/>up to v3.2"| DRV
     DRV <-->|"USB · network · TPM"| HSM
     classDef main fill:#1f6feb,stroke:#1f6feb,color:#fff,font-weight:bold,font-size:18px
     class PLG main
