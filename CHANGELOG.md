@@ -78,6 +78,10 @@ others were verified to be false positives and left alone.
   since what is asserted is which path reaches crypto11, not that anything succeeds. An unknown
   `--provider` / `--old-provider` now also names the offending value instead of reporting a bare
   "unknown provider".
+- **The documentation gave the `aes-gcm` IV as 96 bits.** It is 128 bits (16 bytes), crypto11's
+  default `GCMIVLength`, which the plugin does not override; a JWE produced by the `aes-gcm`
+  family carries a 16-byte IV. `docs/cryptographic-schemes.md` and the glossary entry for
+  *Nonce* now give the size per family, and where each IV comes from. No code change.
 
 ### Removed
 
@@ -110,6 +114,11 @@ others were verified to be false positives and left alone.
 
 ### Changed
 
+- **Go bumped from 1.27.2 to 1.27.3** (`go` directive in `go.mod`, `.go-version`, the
+  `GOLANG_VERSION` build arg in the `Containerfile`, and the version references in
+  `docs/installation.md`). go1.27.3 is a patch release that fixes the `crypto/x509`
+  standard-library vulnerability `GO-2026-6809` ("distrust compromised intermediate
+  certificates") flagged by `govulncheck` on go1.27.2.
 - **CLI help reviewed end to end.** Every `Short`, `Long`, example and flag description was
   rewritten to say what the command actually does. The notable corrections:
   - the root command described itself as "Thales KMS Server for K8S" and never mentioned that
